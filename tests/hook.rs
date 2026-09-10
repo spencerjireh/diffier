@@ -13,13 +13,21 @@ fn script() -> PathBuf {
 }
 
 fn have_jq() -> bool {
-    Command::new("jq")
+    let found = Command::new("jq")
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    // These tests skip themselves when jq is missing, which is right on a
+    // contributor's machine but hides a broken image in CI. CI sets
+    // DIFFIER_REQUIRE_JQ so that a silent skip fails the run instead.
+    assert!(
+        found || std::env::var_os("DIFFIER_REQUIRE_JQ").is_none(),
+        "DIFFIER_REQUIRE_JQ is set but jq is not usable on PATH"
+    );
+    found
 }
 
 /// A tempdir standing in for HOME/XDG, with the paths the hook derives.

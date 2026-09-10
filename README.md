@@ -1,5 +1,8 @@
 # diffier
 
+[![CI](https://github.com/spencerjireh/diffier/actions/workflows/ci.yml/badge.svg)](https://github.com/spencerjireh/diffier/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A live diff feed for Claude Code. Run it in a tmux split next to a Claude Code
 session and every Edit, Write, MultiEdit, and NotebookEdit shows up as a full
 diff the moment it lands, rendered through [delta](https://github.com/dandavison/delta)
@@ -12,10 +15,23 @@ the TUI tails the spool and diffs the snapshot against the file on disk.
 
 ## Install
 
-Requirements: Rust toolchain, `jq`, and optionally `delta`.
+Requirements: `jq`, and optionally `delta`. Building from source also needs a
+Rust toolchain (1.85 or later).
+
+Prebuilt binaries for macOS (Apple Silicon and Intel) and Linux (x86_64 gnu and
+musl, aarch64 gnu) are attached to each
+[release](https://github.com/spencerjireh/diffier/releases):
 
 ```sh
-cargo install --path .
+tar -xzf diffier-<version>-<target>.tar.gz
+install -m 755 diffier-<version>-<target>/diffier ~/.local/bin/
+diffier install
+```
+
+Or build it yourself:
+
+```sh
+cargo install --git https://github.com/spencerjireh/diffier
 diffier install
 ```
 
@@ -98,3 +114,10 @@ INSTA_UPDATE=always cargo test  # refresh the replay snapshot after intended cha
 
 Fixtures live in `tests/fixtures`: a spool with `{{CWD}}` placeholders, the
 pre-edit snapshots, and the post-edit file tree.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full check list that CI runs and
+the rules that apply when changing `hook/diffier.sh`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

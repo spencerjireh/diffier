@@ -1,0 +1,54 @@
+# cargo-deny configuration. Run `cargo deny check` locally; CI runs it too.
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# diffier ships POSIX targets only. Restricting the graph keeps Windows-only
+# crates out of the license and advisory reports for platforms we do not build.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Only flag unmaintained crates we depend on directly. A transitively
+# unmaintained crate is not something a pull request can act on.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Entries below cover licenses not currently in the graph but likely to arrive
+# with a new dependency. Do not warn about the ones that go unused.
+unused-allowed-license = "allow"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unlicense",
+    "Zlib",              # foldhash
+    "BSL-1.0",           # ryu, as an alternative to Apache-2.0
+    "Unicode-3.0",       # unicode-ident
+    "Unicode-DFS-2016",  # finl_unicode, wezterm-bidi
+    "MPL-2.0",           # option-ext (via dirs); file-level copyleft, unmodified
+    "WTFPL",             # terminfo (via ratatui)
+]
+
+[bans]
+# Duplicate versions come in transitively and are not usually actionable in the
+# pull request that surfaces them, so warn rather than fail the build.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

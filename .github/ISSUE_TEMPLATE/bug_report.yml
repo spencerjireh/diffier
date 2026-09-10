@@ -1,0 +1,68 @@
+name: Bug report
+description: Something in diffier does not behave as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: run `diffier dump` in the directory where you saw the
+        problem. Its output is usually enough to reproduce the issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: diffier version
+      description: Output of `diffier --version`, or the commit you built from.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (x86_64)
+        - Linux (aarch64)
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: deps
+    attributes:
+      label: Environment
+      options:
+        - label: "`jq` is on my PATH (`jq --version` succeeds)"
+        - label: "`delta` is on my PATH (`delta --version` succeeds)"
+        - label: I restarted Claude Code after running `diffier install`
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. cd into a repo
+        2. run diffier in one pane, claude in another
+        3. ask Claude to edit a file
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: dump
+    attributes:
+      label: "`diffier dump` output"
+      description: >-
+        Redact anything sensitive. This is rendered as a code block, so no
+        backticks are needed.
+      render: text

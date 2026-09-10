@@ -1,1 +1,11 @@
 /target
+
+# Editor and build leftovers
+**/*.rs.bk
+*.pdb
+
+# insta pending snapshots: review and accept them, do not commit them
+*.snap.new
+
+# macOS
+.DS_Store
