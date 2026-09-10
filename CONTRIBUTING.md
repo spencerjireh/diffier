@@ -2,7 +2,7 @@
 
 ## Setup
 
-Requirements: a Rust toolchain (1.85 or later, edition 2024), `jq`, and
+Requirements: a Rust toolchain (1.88 or later, edition 2024), `jq`, and
 optionally [delta](https://github.com/dandavison/delta).
 
 ```sh

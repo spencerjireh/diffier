@@ -16,7 +16,7 @@ the TUI tails the spool and diffs the snapshot against the file on disk.
 ## Install
 
 Requirements: `jq`, and optionally `delta`. Building from source also needs a
-Rust toolchain (1.85 or later).
+Rust toolchain (1.88 or later).
 
 Prebuilt binaries for macOS (Apple Silicon and Intel) and Linux (x86_64 gnu and
 musl, aarch64 gnu) are attached to each

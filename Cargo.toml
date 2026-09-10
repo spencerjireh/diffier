@@ -9,7 +9,7 @@ repository = "https://github.com/spencerjireh/diffier"
 homepage = "https://github.com/spencerjireh/diffier"
 keywords = ["claude-code", "diff", "tui", "hooks", "delta"]
 categories = ["command-line-utilities", "development-tools"]
-rust-version = "1.85"
+rust-version = "1.88"
 
 [[bin]]
 name = "diffier"
