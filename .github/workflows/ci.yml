@@ -57,7 +57,10 @@ jobs:
           DIFFIER_REQUIRE_JQ: "1"
 
   msrv:
-    name: msrv (1.88)
+    # Deliberately not "msrv (1.88)": this job name is a required status check,
+    # and embedding the version would silently orphan that requirement the next
+    # time the MSRV moves. The version lives in Cargo.toml's rust-version.
+    name: msrv
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
