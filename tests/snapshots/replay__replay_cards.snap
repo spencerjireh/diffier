@@ -1,0 +1,42 @@
+---
+source: tests/replay.rs
+expression: out
+---
+== src/main.rs · Edit · Modified
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+-    println!("hi");
++    println!("hello");
+ }
+
+== notes.txt · Write · Created
+--- /dev/null
++++ b/notes.txt
+@@ -0,0 +1 @@
++todo
+
+== src/lib.rs · MultiEdit · Modified · [Explore]
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+-a
++A
+ b
+-c
++C
+
+== nb.ipynb · NotebookEdit · Modified · (user modified)
+--- a/nb.ipynb
++++ b/nb.ipynb
+@@ -1 +1 @@
+-{"cells":[{"cell_type":"code","source":["x = 1"]}]}
++{"cells":[{"cell_type":"code","source":["x = 2"]}]}
+
+== notes.txt · Write · Modified
+--- a/notes.txt
++++ b/notes.txt
+@@ -1 +1 @@
+-old todo
++todo

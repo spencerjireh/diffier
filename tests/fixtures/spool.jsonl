@@ -1,0 +1,18 @@
+{"session_id":"s0","cwd":"{{CWD}}","hook_event_name":"SessionStart","source":"startup","ts":1000}
+{"session_id":"s0","cwd":"{{CWD}}","hook_event_name":"PostToolUse","tool_name":"Edit","tool_use_id":"stale","tool_input":{"file_path":"{{CWD}}/src/main.rs"},"ts":1001}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"SessionStart","source":"startup","ts":2000}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PreToolUse","tool_name":"Edit","tool_use_id":"e1","tool_input":{"file_path":"{{CWD}}/src/main.rs","old_string":"hi","new_string":"hello","replace_all":false},"ts":2001}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PostToolUse","tool_name":"Edit","tool_use_id":"e1","tool_input":{"file_path":"{{CWD}}/src/main.rs","old_string":"hi","new_string":"hello","replace_all":false},"tool_response":{"filePath":"{{CWD}}/src/main.rs","userModified":false},"ts":2002}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"SessionStart","source":"compact","ts":2500}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PreToolUse","tool_name":"Write","tool_use_id":"w1","tool_input":{"file_path":"{{CWD}}/notes.txt","content":"todo\n"},"ts":3001}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PostToolUse","tool_name":"Write","tool_use_id":"w1","tool_input":{"file_path":"{{CWD}}/notes.txt","content":"todo\n"},"tool_response":{"type":"create","filePath":"{{CWD}}/notes.txt","originalFile":"","userModified":false},"ts":3002}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PreToolUse","tool_name":"MultiEdit","tool_use_id":"m1","agent_id":"a1","agent_type":"Explore","tool_input":{"file_path":"{{CWD}}/src/lib.rs","edits":[{"old_string":"a","new_string":"A"},{"old_string":"c","new_string":"C"}]},"ts":4001}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PostToolUse","tool_name":"MultiEdit","tool_use_id":"m1","agent_id":"a1","agent_type":"Explore","tool_input":{"file_path":"{{CWD}}/src/lib.rs","edits":[{"old_string":"a","new_string":"A"},{"old_string":"c","new_string":"C"}]},"tool_response":{"filePath":"{{CWD}}/src/lib.rs"},"ts":4002}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_use_id":"n1","tool_input":{"notebook_path":"{{CWD}}/nb.ipynb","cell_id":"0","new_source":"x = 2"},"ts":5001}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PostToolUse","tool_name":"NotebookEdit","tool_use_id":"n1","tool_input":{"notebook_path":"{{CWD}}/nb.ipynb","cell_id":"0","new_source":"x = 2"},"tool_response":{"userModified":true},"ts":5002}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PreToolUse","tool_name":"Edit","tool_use_id":"o1","tool_input":{"file_path":"{{CWD}}/orphan.rs","old_string":"orphan","new_string":"x"},"ts":6001}
+{"session_id":"s1","cwd":"/somewhere/else","hook_event_name":"PreToolUse","tool_name":"Edit","tool_use_id":"x1","tool_input":{"file_path":"/somewhere/else/f.rs"},"ts":7001}
+{"session_id":"s1","cwd":"/somewhere/else","hook_event_name":"PostToolUse","tool_name":"Edit","tool_use_id":"x1","tool_input":{"file_path":"/somewhere/else/f.rs"},"ts":7002}
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"b1","tool_input":{"command":"ls"},"ts":8001}
+this line is not json
+{"session_id":"s1","cwd":"{{CWD}}","hook_event_name":"PostToolUse","tool_name":"Write","tool_use_id":"nosnap","tool_input":{"file_path":"{{CWD}}/notes.txt","content":"todo\n"},"tool_response":{"originalFile":"old todo\n"},"ts":9001}
