@@ -27,10 +27,11 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             packages: musl-tools
+          # Built natively on GitHub's arm64 runners. Cross-linking this
+          # target from x86_64 needs the aarch64 glibc objects as well as the
+          # cross gcc, and a native build sidesteps that entirely.
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            packages: gcc-aarch64-linux-gnu
-            linker: aarch64-linux-gnu-gcc
+            os: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
 
@@ -63,8 +64,6 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
