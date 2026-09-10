@@ -37,7 +37,10 @@ jobs:
       - name: Verify the tag matches the crate version
         shell: bash
         run: |
+          # A prerelease tag such as v0.1.0-rc.1 is allowed to carry a suffix
+          # the manifest does not; compare the release version itself.
           tag="${GITHUB_REF_NAME#v}"
+          tag="${tag%%-*}"
           crate=$(cargo metadata --no-deps --format-version 1 \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
           if [ "$tag" != "$crate" ]; then
