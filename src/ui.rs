@@ -13,20 +13,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());
     app.set_viewport(body.height);
 
-    if app.cards.is_empty() {
-        let mut lines = vec![
-            Line::from(""),
-            Line::from(format!(
-                "  Waiting for Claude Code edits in {}",
-                app.cwd().display()
-            ))
-            .dim(),
-        ];
-        if !app.spool_exists() {
+    if !app.has_visible_cards() {
+        let mut lines = vec![Line::from("")];
+        if app.cards.is_empty() {
             lines.push(
-                Line::from("  No spool file yet. Run `diffier install` and restart Claude Code.")
-                    .dim(),
+                Line::from(format!(
+                    "  Waiting for Claude Code edits in {}",
+                    app.cwd().display()
+                ))
+                .dim(),
             );
+            if !app.spool_exists() {
+                lines.push(
+                    Line::from(
+                        "  No spool file yet. Run `diffier install` and restart Claude Code.",
+                    )
+                    .dim(),
+                );
+            }
+        } else {
+            lines.push(Line::from(format!("  No cards for session {}", app.session_label())).dim());
         }
         frame.render_widget(Paragraph::new(Text::from(lines)), body);
     } else {

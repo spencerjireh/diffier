@@ -5,6 +5,7 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use crate::event::HookEvent;
 use crate::paths::rotated;
@@ -26,21 +27,80 @@ pub fn same_cwd(event_cwd: &str, cwd: &Path) -> bool {
     }
 }
 
+/// Which event directories a monitor follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MatchMode {
+    /// Any worktree or subdirectory of the monitor's git repository.
+    #[default]
+    Repo,
+    /// The monitor's exact directory only.
+    CwdOnly,
+}
+
+/// What git reports for a directory, both canonicalized.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CwdInfo {
+    pub common_dir: PathBuf,
+    pub toplevel: PathBuf,
+}
+
+/// Why an event `cwd` was accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CwdMatch {
+    /// The monitor's own directory (exact mode, or repo mode without git).
+    Exact,
+    /// Same repository via git; `toplevel` is the event's worktree root.
+    Repo { toplevel: PathBuf },
+}
+
+/// One `git rev-parse --git-common-dir --show-toplevel` run in `dir`. None
+/// when git is not on PATH, `dir` is outside a repository, or the output is
+/// unusable.
+pub fn git_info(dir: &Path) -> Option<CwdInfo> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--git-common-dir", "--show-toplevel"])
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    let mut lines = text.lines();
+    // The common dir is printed relative to `dir` (`.git`, `../.git`, ...).
+    let common_dir = fs::canonicalize(dir.join(lines.next()?)).ok()?;
+    let toplevel = fs::canonicalize(lines.next()?).ok()?;
+    Some(CwdInfo {
+        common_dir,
+        toplevel,
+    })
+}
+
 /// `same_cwd` with the target canonicalized once and each distinct event `cwd`
 /// answered from a cache: a replay scan sees the same handful of strings tens
-/// of thousands of times.
+/// of thousands of times. In repo mode a cwd that is not the monitor's is
+/// asked of git once and accepted when it shares the repository.
 pub struct CwdMatcher {
     cwd: PathBuf,
     canonical: Option<PathBuf>,
-    cache: HashMap<String, bool>,
+    /// The monitor's repository; Some only when repo mode is active via git.
+    repo: Option<CwdInfo>,
+    cache: HashMap<String, Option<CwdMatch>>,
 }
 
 impl CwdMatcher {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub fn new(cwd: PathBuf, mode: MatchMode) -> Self {
         let canonical = fs::canonicalize(&cwd).ok();
+        let repo = match mode {
+            MatchMode::Repo => git_info(&cwd),
+            MatchMode::CwdOnly => None,
+        };
         Self {
             cwd,
             canonical,
+            repo,
             cache: HashMap::new(),
         }
     }
@@ -49,26 +109,53 @@ impl CwdMatcher {
         &self.cwd
     }
 
-    pub fn matches(&mut self, event_cwd: &str) -> bool {
+    /// The monitor's worktree root when repo mode is active via git.
+    pub fn toplevel(&self) -> Option<&Path> {
+        self.repo.as_ref().map(|r| r.toplevel.as_path())
+    }
+
+    pub fn repo_mode(&self) -> bool {
+        self.repo.is_some()
+    }
+
+    /// Cached classification of one event `cwd`.
+    pub fn resolve(&mut self, event_cwd: &str) -> Option<CwdMatch> {
         if let Some(hit) = self.cache.get(event_cwd) {
-            return *hit;
+            return hit.clone();
         }
-        let hit = match (fs::canonicalize(Path::new(event_cwd)), &self.canonical) {
+        let same = match (fs::canonicalize(Path::new(event_cwd)), &self.canonical) {
             (Ok(a), Some(b)) => a == *b,
             _ => {
                 let norm = |p: &Path| p.to_string_lossy().trim_end_matches('/').to_string();
                 norm(Path::new(event_cwd)) == norm(&self.cwd)
             }
         };
-        self.cache.insert(event_cwd.to_string(), hit);
+        let hit = match &self.repo {
+            None => same.then_some(CwdMatch::Exact),
+            // The monitor's own directory needs no git call.
+            Some(repo) if same => Some(CwdMatch::Repo {
+                toplevel: repo.toplevel.clone(),
+            }),
+            Some(repo) => git_info(Path::new(event_cwd))
+                .filter(|info| info.common_dir == repo.common_dir)
+                .map(|info| CwdMatch::Repo {
+                    toplevel: info.toplevel,
+                }),
+        };
+        self.cache.insert(event_cwd.to_string(), hit.clone());
         hit
     }
 
+    pub fn matches(&mut self, event_cwd: &str) -> bool {
+        self.resolve(event_cwd).is_some()
+    }
+
+    pub fn resolve_event(&mut self, ev: &HookEvent) -> Option<CwdMatch> {
+        self.resolve(ev.cwd.as_deref()?)
+    }
+
     pub fn accepts(&mut self, ev: &HookEvent) -> bool {
-        match ev.cwd.as_deref() {
-            Some(c) => self.matches(c),
-            None => false,
-        }
+        self.resolve_event(ev).is_some()
     }
 }
 
@@ -101,8 +188,8 @@ pub struct Replay {
 }
 
 /// Read the spool (and the rotated `<spool>.1` that precedes it) and return
-/// the events for `cwd` belonging to the sessions still in play.
-pub fn scan_replay(path: &Path, cwd: &Path) -> Replay {
+/// the events `matcher` accepts belonging to the sessions still in play.
+pub fn scan_replay(path: &Path, matcher: &mut CwdMatcher) -> Replay {
     let mut all = Vec::new();
     // The hook rotates at 50 MB; without this the boundary and the history
     // before it are lost the first time the spool fills up.
@@ -114,7 +201,7 @@ pub fn scan_replay(path: &Path, cwd: &Path) -> Replay {
     let bytes = fs::read(path).unwrap_or_default();
     let (current, consumed) = parse_complete_lines(&bytes);
     all.extend(current);
-    let events = select_session(all, cwd);
+    let events = select_session(all, matcher);
     Replay {
         events,
         offset: consumed as u64,
@@ -129,13 +216,13 @@ fn session_key(ev: &HookEvent) -> &str {
 
 /// Pure selection step shared by the replay scan and tests.
 ///
-/// The primary session is the one owning the last non-compact SessionStart for
-/// `cwd`. Any other session with activity after that boundary is running
-/// concurrently in the same directory, so its own current segment is kept too;
-/// otherwise starting a second Claude Code session here would erase the first
-/// session's feed. Original spool order is preserved.
-pub fn select_session(all: Vec<HookEvent>, cwd: &Path) -> Vec<HookEvent> {
-    let mut matcher = CwdMatcher::new(cwd.to_path_buf());
+/// The primary session is the one owning the last non-compact SessionStart
+/// `matcher` accepts. Any other session with activity after that boundary is
+/// running concurrently in the same directory or repository, so its own
+/// current segment is kept too; otherwise starting a second Claude Code
+/// session here would erase the first session's feed. Original spool order is
+/// preserved.
+pub fn select_session(all: Vec<HookEvent>, matcher: &mut CwdMatcher) -> Vec<HookEvent> {
     let mut matching: Vec<HookEvent> = all.into_iter().filter(|e| matcher.accepts(e)).collect();
 
     let is_boundary =
@@ -247,6 +334,10 @@ mod tests {
             .collect()
     }
 
+    fn matcher(cwd: &Path) -> CwdMatcher {
+        CwdMatcher::new(cwd.to_path_buf(), MatchMode::CwdOnly)
+    }
+
     fn ids(events: &[HookEvent]) -> Vec<String> {
         events
             .iter()
@@ -346,7 +437,7 @@ mod tests {
             ),
             line("PostToolUse", &c, r#","session_id":"s1","tool_use_id":"b""#),
         ]);
-        let sel = select_session(all, cwd);
+        let sel = select_session(all, &mut matcher(cwd));
         assert_eq!(ids(&sel), ["a", "b"]);
         assert!(sel[0].is_session_start());
         assert_eq!(sel.len(), 4);
@@ -374,7 +465,10 @@ mod tests {
             line("PostToolUse", &c, r#","session_id":"b","tool_use_id":"b1""#),
             line("PostToolUse", &c, r#","session_id":"a","tool_use_id":"a2""#),
         ]);
-        assert_eq!(ids(&select_session(all, cwd)), ["a1", "b1", "a2"]);
+        assert_eq!(
+            ids(&select_session(all, &mut matcher(cwd))),
+            ["a1", "b1", "a2"]
+        );
 
         // Session a is idle after b starts: it is finished, so it drops out.
         let quiet = parse(&[
@@ -391,7 +485,7 @@ mod tests {
             ),
             line("PostToolUse", &c, r#","session_id":"b","tool_use_id":"b1""#),
         ]);
-        assert_eq!(ids(&select_session(quiet, cwd)), ["b1"]);
+        assert_eq!(ids(&select_session(quiet, &mut matcher(cwd))), ["b1"]);
     }
 
     #[test]
@@ -421,7 +515,7 @@ mod tests {
                 r#","session_id":"a","tool_use_id":"new""#,
             ),
         ]);
-        assert_eq!(ids(&select_session(all, cwd)), ["new"]);
+        assert_eq!(ids(&select_session(all, &mut matcher(cwd))), ["new"]);
     }
 
     #[test]
@@ -439,7 +533,7 @@ mod tests {
                 .unwrap()
             })
             .collect();
-        let sel = select_session(all, cwd);
+        let sel = select_session(all, &mut matcher(cwd));
         assert_eq!(sel.len(), NO_BOUNDARY_TAIL);
         assert_eq!(sel[0].tool_use_id.as_deref(), Some("5"));
     }
@@ -452,7 +546,7 @@ mod tests {
         let p = dir.path().join("events.jsonl");
         let full = format!("{}\n", line("SessionStart", &c, r#","source":"startup""#));
         fs::write(&p, format!("{full}{{\"partial")).unwrap();
-        let r = scan_replay(&p, cwd);
+        let r = scan_replay(&p, &mut matcher(cwd));
         assert_eq!(r.events.len(), 1);
         assert_eq!(r.offset, full.len() as u64);
     }
@@ -493,7 +587,7 @@ mod tests {
         );
         fs::write(&p, &new).unwrap();
 
-        let r = scan_replay(&p, cwd);
+        let r = scan_replay(&p, &mut matcher(cwd));
         assert_eq!(ids(&r.events), ["before", "after"]);
         // The tail offset refers to the live spool only.
         assert_eq!(r.offset, new.len() as u64);
@@ -504,7 +598,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().to_path_buf();
         let c = cwd.to_string_lossy().to_string();
-        let mut m = CwdMatcher::new(cwd.clone());
+        let mut m = matcher(&cwd);
         assert!(m.matches(&c));
         assert!(m.matches(&format!("{c}/")));
         assert!(!m.matches("/somewhere/else"));
@@ -513,5 +607,26 @@ mod tests {
             m.matches("/somewhere/else"),
             same_cwd("/somewhere/else", &cwd)
         );
+    }
+
+    #[test]
+    fn repo_mode_falls_back_outside_a_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        let c = cwd.to_string_lossy().to_string();
+        let mut m = CwdMatcher::new(cwd.clone(), MatchMode::Repo);
+        assert!(!m.repo_mode());
+        assert!(m.toplevel().is_none());
+        assert_eq!(m.resolve(&c), Some(CwdMatch::Exact));
+        assert_eq!(m.resolve("/somewhere/else"), None);
+    }
+
+    #[test]
+    fn cwd_only_never_consults_git() {
+        let m = CwdMatcher::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            MatchMode::CwdOnly,
+        );
+        assert!(!m.repo_mode());
     }
 }

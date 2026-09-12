@@ -11,8 +11,8 @@ use diffier::app::App;
 use diffier::install;
 use diffier::paths::Paths;
 use diffier::render::{EditCard, Renderer, delta_ansi};
-use diffier::session::Pipeline;
-use diffier::spool;
+use diffier::session::{Pipeline, session_matches, session_order};
+use diffier::spool::{self, MatchMode};
 use diffier::ui;
 
 const TICK: Duration = Duration::from_millis(100);
@@ -32,9 +32,13 @@ struct Cli {
 
 #[derive(clap::Args, Clone)]
 struct RunArgs {
-    /// Directory whose Claude Code session to follow (default: current dir).
+    /// Directory whose Claude Code sessions to follow (default: current dir).
     #[arg(long)]
     cwd: Option<PathBuf>,
+    /// Follow only sessions in this exact directory, not every worktree and
+    /// subdirectory of its git repository.
+    #[arg(long)]
+    cwd_only: bool,
     /// Spool file to read (default: the hook's spool).
     #[arg(long)]
     spool: Option<PathBuf>,
@@ -44,6 +48,16 @@ struct RunArgs {
     /// Render diffs without delta even when it is installed.
     #[arg(long)]
     no_delta: bool,
+}
+
+impl RunArgs {
+    fn match_mode(&self) -> MatchMode {
+        if self.cwd_only {
+            MatchMode::CwdOnly
+        } else {
+            MatchMode::Repo
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -58,13 +72,17 @@ enum Command {
         #[arg(long)]
         purge: bool,
     },
-    /// Print the current session's cards to stdout and exit.
+    /// Print the current sessions' cards to stdout and exit.
     Dump {
         #[command(flatten)]
         run: RunArgs,
         /// Print delta's ANSI output instead of plain text.
         #[arg(long)]
         ansi: bool,
+        /// Only cards whose session id starts or ends with this; a card's
+        /// session tag works.
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 
@@ -90,11 +108,11 @@ fn main() -> Result<()> {
         Some(Command::Run(args)) => run_tui(&args),
         Some(Command::Install) => install::install(&Paths::discover()),
         Some(Command::Uninstall { purge }) => install::uninstall(&Paths::discover(), purge),
-        Some(Command::Dump { run, ansi }) => dump(&run, ansi),
+        Some(Command::Dump { run, ansi, session }) => dump(&run, ansi, session.as_deref()),
     }
 }
 
-fn dump(args: &RunArgs, ansi: bool) -> Result<()> {
+fn dump(args: &RunArgs, ansi: bool, session: Option<&str>) -> Result<()> {
     let (paths, cwd) = resolve(args)?;
     if !paths.spool.exists() {
         anyhow::bail!(
@@ -110,17 +128,28 @@ fn dump(args: &RunArgs, ansi: bool) -> Result<()> {
     } else {
         detected.clone()
     };
-    let replay = spool::scan_replay(&paths.spool, &cwd);
-    let mut pipeline = Pipeline::new(cwd.clone(), paths.snapshot_root.clone());
+    let mut pipeline = Pipeline::new(cwd, paths.snapshot_root.clone(), args.match_mode());
+    let replay = spool::scan_replay(&paths.spool, pipeline.matcher_mut());
     let inputs = pipeline.replay(&replay.events);
+    // Tags follow the same rule as the TUI: shown once the feed has more than
+    // one session, before any --session filter narrows it.
+    let tags = session_order(&inputs).len() > 1;
     let width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(100);
     let mut out = io::stdout().lock();
     for input in inputs {
-        let card = EditCard::new(input, &build_with, width, &cwd);
-        writeln!(out, "== {}", card.header_text())?;
+        if let Some(needle) = session
+            && !input
+                .session_id
+                .as_deref()
+                .is_some_and(|id| session_matches(id, needle))
+        {
+            continue;
+        }
+        let card = EditCard::new(input, &build_with, width);
+        writeln!(out, "== {}", card.header_text(tags))?;
         let rendered = match (&detected, ansi) {
             (Renderer::Delta(bin), true) if !card.input.diff.unified.is_empty() => {
-                delta_ansi(bin, &card.input.diff.unified, width, &cwd)
+                delta_ansi(bin, &card.input.diff.unified, width, &card.input.root)
             }
             _ => None,
         };
@@ -141,7 +170,7 @@ fn run_tui(args: &RunArgs) -> Result<()> {
     let (paths, cwd) = resolve(args)?;
     let renderer = Renderer::detect(args.no_delta);
     let width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(100);
-    let mut app = App::new(cwd, &paths, renderer, width);
+    let mut app = App::new(cwd, &paths, renderer, width, args.match_mode());
 
     let mut terminal = ratatui::init();
     let _ = execute!(io::stdout(), EnableMouseCapture);

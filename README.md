@@ -30,8 +30,12 @@ cd ~/Projects/some-repo
 tmux split-window -h diffier   # then run claude in the other pane
 ```
 
-It follows only sessions whose working directory matches the one it started in,
-replaying that directory's recent edits before following new ones.
+It follows every session in the git repository it started in, including other
+worktrees and subdirectories, replaying their recent edits before following new
+ones. Once a second session has made an edit, each card carries a session tag
+(the last six characters of the session id, prefixed with the worktree name
+when it differs). Outside a repository, or with `--cwd-only`, it follows only
+sessions whose working directory matches its own.
 
 | Key | Action |
 | --- | --- |
@@ -39,14 +43,17 @@ replaying that directory's recent edits before following new ones.
 | `Ctrl-d` / `Ctrl-u`, PgDn / PgUp | half page / page |
 | `g` / `G` | top / bottom, and resume follow |
 | `p` | toggle follow |
+| `Tab` | cycle the session filter: all, then each session |
 | `q`, Esc, `Ctrl-c` | quit |
 
 Scrolling up pauses follow. Mouse capture is on for the wheel, so select text
 with tmux copy mode or shift-drag.
 
 ```sh
-diffier dump             # print the current session's cards and exit
+diffier dump             # print the current sessions' cards and exit
+diffier dump --session ab12cd   # only one session, by tag or id prefix
 diffier run --no-delta   # force the plain renderer
+diffier run --cwd-only   # ignore other worktrees of this repository
 diffier uninstall        # remove the hook and its settings entries
 ```
 
