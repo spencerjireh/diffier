@@ -10,7 +10,7 @@ installed.
 
 ## Install
 
-Requires `jq`. `delta` is optional.
+`delta` is optional; without it diffs render in a plain built-in style.
 
 ```sh
 cargo install diffier
@@ -25,10 +25,11 @@ development branch, use `cargo install --git https://github.com/spencerjireh/dif
 The binary lands in `~/.cargo/bin`. If `diffier` is not found afterwards, add
 that directory to your `PATH`.
 
-`diffier install` writes `~/.claude/hooks/diffier.sh` and registers it in
-`~/.claude/settings.json`, preserving everything else in that file and writing a
-one-time `settings.json.bak`. Restart any running Claude Code session so the
-hooks load.
+`diffier install` registers `diffier hook` in `~/.claude/settings.json` by the
+absolute path of the binary, preserving everything else in that file and
+writing a one-time `settings.json.bak`. Restart any running Claude Code session
+so the hooks load. Run it again if you move the binary; it also removes the
+`~/.claude/hooks/diffier.sh` script that versions before 0.2 installed.
 
 ## Use
 

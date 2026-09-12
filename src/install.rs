@@ -1,7 +1,6 @@
-//! Install and remove the hook script and its entries in Claude Code settings.
+//! Register and remove the `diffier hook` entries in Claude Code settings.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -9,8 +8,9 @@ use serde_json::{Map, Value, json};
 
 use crate::paths::Paths;
 
-pub const HOOK_SCRIPT: &str = include_str!("../hook/diffier.sh");
-pub const HOOK_MARKER: &str = "diffier.sh";
+/// The shell hook that preceded `diffier hook`; `install` replaces its entries
+/// and deletes the script.
+pub const LEGACY_HOOK_MARKER: &str = "diffier.sh";
 /// Anchored so an MCP tool whose name merely contains "Edit" does not match.
 pub const TOOL_MATCHER: &str = "^(Edit|Write|MultiEdit|NotebookEdit)$";
 const HOOK_TIMEOUT_SECS: u64 = 5;
@@ -22,6 +22,13 @@ const HOOK_EVENTS: [(&str, Option<&str>); 3] = [
     ("SessionStart", None),
 ];
 
+/// `'<path to diffier>' hook`, or the legacy `diffier.sh` script.
+fn command_is_ours(command: &str) -> bool {
+    let command = command.trim_end();
+    command.contains(LEGACY_HOOK_MARKER)
+        || (command.contains("diffier") && command.ends_with("' hook"))
+}
+
 fn group_is_ours(group: &Value) -> bool {
     group
         .get("hooks")
@@ -30,7 +37,7 @@ fn group_is_ours(group: &Value) -> bool {
             hooks.iter().any(|h| {
                 h.get("command")
                     .and_then(Value::as_str)
-                    .map(|c| c.contains(HOOK_MARKER))
+                    .map(command_is_ours)
                     .unwrap_or(false)
             })
         })
@@ -43,20 +50,26 @@ pub fn shell_quote(path: &str) -> String {
     format!("'{}'", path.replace('\'', "'\\''"))
 }
 
-fn our_group(matcher: Option<&str>, script: &str) -> Value {
+/// The command Claude Code runs: the binary by absolute path, so it works
+/// without `~/.cargo/bin` on PATH, followed by the `hook` subcommand.
+pub fn hook_command(exe: &str) -> String {
+    format!("{} hook", shell_quote(exe))
+}
+
+fn our_group(matcher: Option<&str>, exe: &str) -> Value {
     let mut g = Map::new();
     if let Some(m) = matcher {
         g.insert("matcher".into(), json!(m));
     }
     g.insert(
         "hooks".into(),
-        json!([{ "type": "command", "command": shell_quote(script), "timeout": HOOK_TIMEOUT_SECS }]),
+        json!([{ "type": "command", "command": hook_command(exe), "timeout": HOOK_TIMEOUT_SECS }]),
     );
     Value::Object(g)
 }
 
 /// Add or refresh our hook groups. Everything else in `settings` is preserved.
-pub fn merge_hooks(settings: &mut Value, script: &str) {
+pub fn merge_hooks(settings: &mut Value, exe: &str) {
     if !settings.is_object() {
         *settings = json!({});
     }
@@ -73,7 +86,7 @@ pub fn merge_hooks(settings: &mut Value, script: &str) {
         }
         let arr = list.as_array_mut().expect("array");
         arr.retain(|g| !group_is_ours(g));
-        arr.push(our_group(matcher, script));
+        arr.push(our_group(matcher, exe));
     }
 }
 
@@ -125,18 +138,13 @@ fn write_settings(path: &Path, value: &Value) -> Result<()> {
     Ok(())
 }
 
-pub fn install(paths: &Paths) -> Result<()> {
-    let script = &paths.hook_script;
-    if let Some(dir) = script.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    fs::write(script, HOOK_SCRIPT).with_context(|| format!("writing {}", script.display()))?;
-    fs::set_permissions(script, fs::Permissions::from_mode(0o755))?;
-    println!("wrote hook script  {}", script.display());
+pub fn install(paths: &Paths, exe: &Path) -> Result<()> {
+    let exe = exe.to_string_lossy();
+    println!("hook command       {}", hook_command(&exe));
 
     let mut settings = load_settings(&paths.settings)?;
     let before = settings.clone();
-    merge_hooks(&mut settings, &script.to_string_lossy());
+    merge_hooks(&mut settings, &exe);
     if settings == before {
         println!("settings unchanged  {}", paths.settings.display());
     } else {
@@ -145,9 +153,19 @@ pub fn install(paths: &Paths) -> Result<()> {
             println!("registered {event:<12} {}", paths.settings.display());
         }
     }
+    remove_legacy_script(paths)?;
     println!("spool              {}", paths.spool.display());
     println!("snapshots          {}", paths.snapshot_root.display());
     println!("Restart running Claude Code sessions so the hooks load.");
+    Ok(())
+}
+
+fn remove_legacy_script(paths: &Paths) -> Result<()> {
+    match fs::remove_file(&paths.hook_script) {
+        Ok(()) => println!("removed {}", paths.hook_script.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => bail!("removing {}: {e}", paths.hook_script.display()),
+    }
     Ok(())
 }
 
@@ -163,11 +181,7 @@ pub fn uninstall(paths: &Paths, purge: bool) -> Result<()> {
             println!("removed hook entries from {}", paths.settings.display());
         }
     }
-    match fs::remove_file(&paths.hook_script) {
-        Ok(()) => println!("removed {}", paths.hook_script.display()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => bail!("removing {}: {e}", paths.hook_script.display()),
-    }
+    remove_legacy_script(paths)?;
     if purge {
         if let Some(dir) = paths.spool.parent() {
             let _ = fs::remove_dir_all(dir);
@@ -183,18 +197,40 @@ pub fn uninstall(paths: &Paths, purge: bool) -> Result<()> {
 mod tests {
     use super::*;
 
-    const SCRIPT: &str = "/home/u/.claude/hooks/diffier.sh";
+    const EXE: &str = "/home/u/.cargo/bin/diffier";
 
     #[test]
     fn merge_into_empty() {
         let mut s = json!({});
-        merge_hooks(&mut s, SCRIPT);
+        merge_hooks(&mut s, EXE);
         let pre = &s["hooks"]["PreToolUse"];
         assert_eq!(pre.as_array().unwrap().len(), 1);
         assert_eq!(pre[0]["matcher"], TOOL_MATCHER);
-        assert_eq!(pre[0]["hooks"][0]["command"], shell_quote(SCRIPT));
+        assert_eq!(
+            pre[0]["hooks"][0]["command"],
+            "'/home/u/.cargo/bin/diffier' hook"
+        );
         assert_eq!(pre[0]["hooks"][0]["timeout"], 5);
         assert!(s["hooks"]["SessionStart"][0].get("matcher").is_none());
+    }
+
+    #[test]
+    fn legacy_script_entries_are_replaced() {
+        let mut s = json!({"hooks": {"PreToolUse": [
+            {"matcher": TOOL_MATCHER, "hooks": [{"type": "command", "command": "'/home/u/.claude/hooks/diffier.sh'", "timeout": 5}]}
+        ]}});
+        merge_hooks(&mut s, EXE);
+        let pre = s["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 1);
+        assert_eq!(pre[0]["hooks"][0]["command"], hook_command(EXE));
+    }
+
+    #[test]
+    fn unrelated_hook_commands_are_not_ours() {
+        assert!(!command_is_ours("'/usr/bin/other' hook"));
+        assert!(!command_is_ours("diffier dump"));
+        assert!(command_is_ours("'/opt/homebrew/bin/diffier' hook"));
+        assert!(command_is_ours("'/x/diffier' hook\n"));
     }
 
     #[test]
@@ -208,21 +244,21 @@ mod tests {
             }
         });
         let mut s = original.clone();
-        merge_hooks(&mut s, SCRIPT);
+        merge_hooks(&mut s, EXE);
         assert_eq!(s["model"], "x");
         assert_eq!(s["statusLine"]["command"], "foo");
         assert_eq!(s["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
         assert_eq!(s["hooks"]["PreToolUse"][0]["matcher"], "Bash");
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 1);
         let once = serde_json::to_string_pretty(&s).unwrap();
-        merge_hooks(&mut s, SCRIPT);
+        merge_hooks(&mut s, EXE);
         assert_eq!(serde_json::to_string_pretty(&s).unwrap(), once);
-        // Upgrading the script path replaces rather than appends.
-        merge_hooks(&mut s, "/new/diffier.sh");
+        // Upgrading the binary path replaces rather than appends.
+        merge_hooks(&mut s, "/new/diffier");
         assert_eq!(s["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
         assert_eq!(
             s["hooks"]["PreToolUse"][1]["hooks"][0]["command"],
-            "'/new/diffier.sh'"
+            "'/new/diffier' hook"
         );
         // Uninstall restores the original.
         remove_hooks(&mut s);
@@ -231,10 +267,10 @@ mod tests {
 
     #[test]
     fn command_is_shell_quoted_and_still_recognized() {
-        let awkward = "/Users/John Smith/o'brien/.claude/hooks/diffier.sh";
+        let awkward = "/Users/John Smith/o'brien/.cargo/bin/diffier";
         assert_eq!(
-            shell_quote(awkward),
-            "'/Users/John Smith/o'\\''brien/.claude/hooks/diffier.sh'"
+            hook_command(awkward),
+            "'/Users/John Smith/o'\\''brien/.cargo/bin/diffier' hook"
         );
         let mut s = json!({});
         merge_hooks(&mut s, awkward);
@@ -250,7 +286,7 @@ mod tests {
     #[test]
     fn remove_drops_empty_containers() {
         let mut s = json!({"a": 1});
-        merge_hooks(&mut s, SCRIPT);
+        merge_hooks(&mut s, EXE);
         remove_hooks(&mut s);
         assert_eq!(s, json!({"a": 1}));
         remove_hooks(&mut s);
@@ -268,25 +304,22 @@ mod tests {
         };
         fs::create_dir_all(paths.settings.parent().unwrap()).unwrap();
         fs::write(&paths.settings, "{\n  \"theme\": \"dark\"\n}\n").unwrap();
-        install(&paths).unwrap();
-        assert!(paths.hook_script.exists());
-        assert_eq!(
-            fs::metadata(&paths.hook_script)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o755
-        );
+        // A leftover script from the shell-hook era is cleaned up.
+        fs::create_dir_all(paths.hook_script.parent().unwrap()).unwrap();
+        fs::write(&paths.hook_script, "#!/bin/sh\n").unwrap();
+        install(&paths, Path::new(EXE)).unwrap();
+        assert!(!paths.hook_script.exists());
         let v: Value = serde_json::from_str(&fs::read_to_string(&paths.settings).unwrap()).unwrap();
         assert_eq!(v["theme"], "dark");
-        assert!(v["hooks"]["PostToolUse"].is_array());
+        assert_eq!(
+            v["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            hook_command(EXE)
+        );
         assert!(paths.settings.with_extension("json.bak").exists());
         let after_first = fs::read_to_string(&paths.settings).unwrap();
-        install(&paths).unwrap();
+        install(&paths, Path::new(EXE)).unwrap();
         assert_eq!(fs::read_to_string(&paths.settings).unwrap(), after_first);
         uninstall(&paths, false).unwrap();
-        assert!(!paths.hook_script.exists());
         let v: Value = serde_json::from_str(&fs::read_to_string(&paths.settings).unwrap()).unwrap();
         assert_eq!(v, json!({"theme": "dark"}));
     }

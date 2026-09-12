@@ -2,17 +2,14 @@
 
 ## Setup
 
-Requirements: a Rust toolchain (1.88 or later, edition 2024), `jq`, and
-optionally [delta](https://github.com/dandavison/delta).
+Requirements: a Rust toolchain (1.89 or later, edition 2024) and optionally
+[delta](https://github.com/dandavison/delta).
 
 ```sh
 git clone https://github.com/spencerjireh/diffier
 cd diffier
 cargo test
 ```
-
-`jq` is a hard requirement for the test suite. `tests/hook.rs` runs the real
-hook script through `sh`, and those tests fail without it.
 
 ## Before you open a pull request
 
@@ -44,8 +41,9 @@ There are three layers:
 - `tests/replay.rs` — a golden test. It copies `tests/fixtures/tree` into a
   temporary directory, substitutes `{{CWD}}` in `tests/fixtures/spool.jsonl`,
   and asserts the rendered cards against an `insta` snapshot.
-- `tests/hook.rs` — behavioral tests of `hook/diffier.sh`, including its
-  resistance to shell injection through hook payload fields.
+- `tests/hook.rs` — behavioral tests of `diffier hook` run as a child process
+  the way Claude Code runs it: exit code, spool contents, snapshot files, and
+  concurrent appends.
 
 After an intended change to rendering, refresh the snapshot and read the diff
 before you commit it:
@@ -55,21 +53,20 @@ INSTA_UPDATE=always cargo test
 git diff tests/snapshots/
 ```
 
-## Changing the hook script
+## Changing the hook subcommand
 
-`hook/diffier.sh` is `include_str!`-ed into `src/install.rs`, so it ships inside
-the binary. Two rules:
+`src/hook.rs` is what Claude Code runs on every edit. Three rules:
 
 - **It must never exit non-zero.** Exit code 2 on `PreToolUse` blocks Claude's
   tool call, and any other non-zero code puts a notice in the user's session.
-  Every failure path ends in `exit 0`.
-- **Payload fields must stay constrained to strings** before they reach the
-  shell. The `jq ... | strings` filters exist so that an array- or object-valued
-  `file_path` cannot expand into extra words that `eval` would run as a command.
-  `tests/hook.rs` covers both cases; keep them passing.
+  `hook::run` returns `()`, swallows every error, and `main` wraps it in
+  `catch_unwind` before calling `process::exit(0)`.
+- **It must never write to stdout.** Claude Code parses hook stdout as JSON
+  on some events. Diagnostics go to stderr or nowhere.
+- **Payload fields are read as JSON strings only.** `extract_fields` treats an
+  array- or object-valued `file_path` as absent rather than as a path.
 
-The script is POSIX `sh`, not bash. It runs on both GNU and BSD userland, which
-is why CI tests on Linux and macOS.
+`tests/hook.rs` covers all three; keep them passing.
 
 ## Commits
 

@@ -1,33 +1,18 @@
-//! Behavioral tests for the shell hook itself: it must never exit non-zero,
-//! never let payload data reach the shell as code, and never corrupt the spool.
+//! Behavioral tests for `diffier hook` as Claude Code runs it: it must never
+//! exit non-zero, never treat a non-string payload field as a path, and never
+//! corrupt the spool.
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-fn script() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("hook/diffier.sh")
-}
-
-fn have_jq() -> bool {
-    let found = Command::new("jq")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    // These tests skip themselves when jq is missing, which is right on a
-    // contributor's machine but hides a broken image in CI. CI sets
-    // DIFFIER_REQUIRE_JQ so that a silent skip fails the run instead.
-    assert!(
-        found || std::env::var_os("DIFFIER_REQUIRE_JQ").is_none(),
-        "DIFFIER_REQUIRE_JQ is set but jq is not usable on PATH"
-    );
-    found
+fn hook_command() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_diffier"));
+    c.arg("hook");
+    c
 }
 
 /// A tempdir standing in for HOME/XDG, with the paths the hook derives.
@@ -59,9 +44,8 @@ impl Env {
     }
 
     fn command(&self) -> Command {
-        let mut c = Command::new("sh");
-        c.arg(script())
-            .env_remove("HOME")
+        let mut c = hook_command();
+        c.env_remove("HOME")
             .env("XDG_STATE_HOME", self.state())
             .env("XDG_CACHE_HOME", self.cache())
             .stdout(Stdio::null())
@@ -91,49 +75,35 @@ impl Env {
 }
 
 #[test]
-fn array_valued_file_path_is_not_executed() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
+fn array_valued_file_path_is_not_a_path() {
     let env = Env::new();
-    let sentinel = env.dir.path().join("pwned");
-    // jq's @sh quotes each element separately, so an array would expand to
-    // extra words that `eval` runs as a command.
-    let payload = format!(
-        r#"{{"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"t","tool_name":"Edit","cwd":"/p","tool_input":{{"file_path":["x","touch","{}"]}}}}"#,
-        sentinel.display()
-    );
-    assert_eq!(env.run(&payload), 0);
-    assert!(
-        !sentinel.exists(),
-        "payload data was executed as a shell command"
-    );
+    // The shell hook this replaced could have expanded an array into extra
+    // words for `eval`; here it must simply count as no path at all.
+    let payload = r#"{"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"t","tool_name":"Edit","cwd":"/p","tool_input":{"file_path":["x","touch","/tmp/pwned"]}}"#;
+    assert_eq!(env.run(payload), 0);
+    assert!(!env.snapshots().join("s").exists());
     // The event is still spooled, and exactly once.
     assert_eq!(env.spool_lines().len(), 1);
 }
 
 #[test]
-fn tool_name_object_is_not_executed() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
+fn array_valued_tool_name_is_not_a_file_tool() {
     let env = Env::new();
-    let sentinel = env.dir.path().join("pwned2");
+    let file = env.dir.path().join("c.txt");
+    fs::write(&file, "x\n").unwrap();
     let payload = format!(
-        r#"{{"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"t","tool_name":["Edit","touch","{}"],"cwd":"/p","tool_input":{{"file_path":"/tmp/x"}}}}"#,
-        sentinel.display()
+        r#"{{"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"t","tool_name":["Edit"],"cwd":"/p","tool_input":{{"file_path":"{}"}}}}"#,
+        file.display()
     );
     assert_eq!(env.run(&payload), 0);
-    assert!(!sentinel.exists());
+    assert!(!env.snapshots().join("s/t").exists());
+    assert_eq!(env.spool_lines().len(), 1);
 }
 
 #[test]
 fn unset_home_and_xdg_exits_zero_without_writing() {
     let env = Env::new();
-    let mut child = Command::new("sh")
-        .arg(script())
+    let mut child = hook_command()
         .env_remove("HOME")
         .env_remove("XDG_STATE_HOME")
         .env_remove("XDG_CACHE_HOME")
@@ -153,14 +123,31 @@ fn unset_home_and_xdg_exits_zero_without_writing() {
     assert_eq!(child.wait().unwrap().code(), Some(0));
     // Nothing relative to the cwd either.
     assert!(!env.dir.path().join("diffier").exists());
+    assert!(!env.dir.path().join(".local").exists());
+}
+
+#[test]
+fn hook_writes_nothing_to_stdout() {
+    let env = Env::new();
+    let out =
+        env.command()
+            .stdout(Stdio::piped())
+            .stdin(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                child.stdin.take().unwrap().write_all(
+                    br#"{"hook_event_name":"SessionStart","session_id":"s","cwd":"/p"}"#,
+                )?;
+                child.wait_with_output()
+            })
+            .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
+    assert_eq!(env.spool_lines().len(), 1);
 }
 
 #[test]
 fn pre_and_post_snapshot_the_file_on_both_sides() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
     let env = Env::new();
     let file = env.dir.path().join("a.txt");
     fs::write(&file, "before\n").unwrap();
@@ -194,15 +181,11 @@ fn pre_and_post_snapshot_the_file_on_both_sides() {
         post["tool_input"]["file_path"].as_str().unwrap(),
         file.to_str().unwrap()
     );
-    assert!(post["ts"].as_f64().unwrap() > 0.0);
+    assert!(post["ts"].as_u64().unwrap() > 0);
 }
 
 #[test]
 fn original_file_is_kept_when_no_snapshot_exists() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
     let env = Env::new();
     // PostToolUse with no preceding PreToolUse: originalFile is the only
     // pre-edit content the monitor can fall back to.
@@ -218,10 +201,6 @@ fn original_file_is_kept_when_no_snapshot_exists() {
 
 #[test]
 fn post_for_a_removed_file_writes_an_absent_marker() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
     let env = Env::new();
     assert_eq!(
         env.run(
@@ -234,10 +213,6 @@ fn post_for_a_removed_file_writes_an_absent_marker() {
 
 #[test]
 fn non_file_tools_are_spooled_but_not_snapshotted() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
     let env = Env::new();
     let file = env.dir.path().join("b.txt");
     fs::write(&file, "x\n").unwrap();
@@ -255,10 +230,6 @@ fn non_file_tools_are_spooled_but_not_snapshotted() {
 
 #[test]
 fn concurrent_writers_do_not_interleave() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
     let env = Env::new();
     const WRITERS: usize = 12;
     // Large enough that the append needs several write() calls, which is what
@@ -297,10 +268,6 @@ fn concurrent_writers_do_not_interleave() {
 
 #[test]
 fn spool_rotates_on_any_event_not_just_session_start() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
     let env = Env::new();
     fs::create_dir_all(env.spool().parent().unwrap()).unwrap();
     // Just over the hook's 50 MB threshold.
@@ -320,12 +287,8 @@ fn spool_rotates_on_any_event_not_just_session_start() {
 
 #[test]
 fn malformed_payload_still_produces_one_line() {
-    if !have_jq() {
-        eprintln!("skipping: jq not on PATH");
-        return;
-    }
     let env = Env::new();
-    // jq fails, so the raw payload is spooled with its newlines stripped.
+    // Not JSON, so the raw payload is spooled with its newlines stripped.
     assert_eq!(env.run("{not json\nat all"), 0);
     assert_eq!(env.spool_lines(), ["{not jsonat all"]);
 }

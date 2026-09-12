@@ -35,7 +35,6 @@ body:
     attributes:
       label: Environment
       options:
-        - label: "`jq` is on my PATH (`jq --version` succeeds)"
         - label: "`delta` is on my PATH (`delta --version` succeeds)"
         - label: I restarted Claude Code after running `diffier install`
 

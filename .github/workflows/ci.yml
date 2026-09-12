@@ -48,23 +48,17 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The hook tests shell out to jq. Fail loudly if the runner lacks it
-      # instead of letting those tests skip themselves into a false pass.
-      - name: Check jq is available
-        run: jq --version
       - run: cargo test --all-features --locked
-        env:
-          DIFFIER_REQUIRE_JQ: "1"
 
   msrv:
-    # Deliberately not "msrv (1.88)": this job name is a required status check,
+    # Deliberately not "msrv (1.89)": this job name is a required status check,
     # and embedding the version would silently orphan that requirement the next
     # time the MSRV moves. The version lives in Cargo.toml's rust-version.
     name: msrv
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.88
+      - uses: dtolnay/rust-toolchain@1.89
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets --all-features --locked
 
