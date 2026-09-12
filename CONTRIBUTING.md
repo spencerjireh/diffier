@@ -27,6 +27,15 @@ cargo test --all-features --locked
 CI also runs `cargo deny check` and builds the docs with warnings denied. All of
 it must pass.
 
+## Branches and merging
+
+`main` accepts squash merges from pull requests only, and its history is linear.
+Cut a branch from `main` named `<type>/<slug>` with a Conventional Commits type
+(`feat/session-filter`, `fix/spool-race`). Give the pull request a Conventional
+Commits title: it becomes the commit subject on `main`, and the PR body becomes
+the commit body. CI must pass before the merge button is enabled, and the branch
+is deleted on merge.
+
 ## Tests
 
 There are three layers:
