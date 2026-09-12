@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::diff::{self, DiffResult};
 use crate::event::HookEvent;
 use crate::snapshot;
-use crate::spool::CwdMatcher;
+use crate::spool::{CwdMatch, CwdMatcher, MatchMode};
 
 /// Pending PreToolUse entries older than this are dropped.
 pub const PENDING_TTL_MS: u64 = 10 * 60 * 1000;
@@ -18,6 +18,7 @@ pub struct PendingPre {
     pub tool: String,
     pub file: Option<PathBuf>,
     pub agent: Option<String>,
+    pub session_id: Option<String>,
 }
 
 /// Everything needed to render a card; rendering is a separate step.
@@ -30,6 +31,28 @@ pub struct CardInput {
     pub agent: Option<String>,
     pub diff: DiffResult,
     pub user_modified: bool,
+    pub session_id: Option<String>,
+    /// Basename of the edit's worktree, only when it is not the monitor's.
+    pub worktree: Option<String>,
+    /// Directory `path` is relative to and delta runs in: the edit's worktree
+    /// root in repo mode, otherwise the monitor's cwd.
+    pub root: PathBuf,
+}
+
+/// Distinct session ids in order of first card.
+pub fn session_order(inputs: &[CardInput]) -> Vec<String> {
+    let mut seen = Vec::new();
+    for id in inputs.iter().filter_map(|i| i.session_id.as_deref()) {
+        if !seen.iter().any(|s| s == id) {
+            seen.push(id.to_string());
+        }
+    }
+    seen
+}
+
+/// `--session` matching: a prefix of the id, or its tail so a header tag works.
+pub fn session_matches(id: &str, needle: &str) -> bool {
+    id.starts_with(needle) || id.ends_with(needle)
 }
 
 pub struct Pipeline {
@@ -41,9 +64,9 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn new(cwd: PathBuf, snapshot_root: PathBuf) -> Self {
+    pub fn new(cwd: PathBuf, snapshot_root: PathBuf, mode: MatchMode) -> Self {
         Self {
-            matcher: CwdMatcher::new(cwd.clone()),
+            matcher: CwdMatcher::new(cwd.clone(), mode),
             cwd,
             snapshot_root,
             pending: HashMap::new(),
@@ -53,6 +76,15 @@ impl Pipeline {
 
     pub fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    pub fn matcher_mut(&mut self) -> &mut CwdMatcher {
+        &mut self.matcher
+    }
+
+    /// The monitor's worktree root when repo matching is active via git.
+    pub fn toplevel(&self) -> Option<&Path> {
+        self.matcher.toplevel()
     }
 
     pub fn pending_len(&self) -> usize {
@@ -66,12 +98,12 @@ impl Pipeline {
 
     /// Feed one event. Returns a card only for a PostToolUse of a file tool.
     pub fn handle(&mut self, ev: &HookEvent) -> Option<CardInput> {
-        if !self.accepts(ev) {
-            return None;
-        }
+        let matched = self.matcher.resolve_event(ev)?;
         if ev.is_session_start() {
+            // Only this session's in-flight edits are stale; another session
+            // in the same repo may have one between its Pre and Post.
             if ev.source.as_deref() != Some("compact") {
-                self.pending.clear();
+                self.pending.retain(|_, p| p.session_id != ev.session_id);
             }
             self.session_id = ev.session_id.clone();
             return None;
@@ -88,6 +120,7 @@ impl Pipeline {
                         tool: ev.tool_name.clone().unwrap_or_default(),
                         file: ev.file_path(),
                         agent: ev.agent_label(),
+                        session_id: ev.session_id.clone(),
                     },
                 );
             }
@@ -112,7 +145,20 @@ impl Pipeline {
         let agent = ev
             .agent_label()
             .or_else(|| pre.as_ref().and_then(|p| p.agent.clone()));
-        let path = diff::display_path(&file, &self.cwd);
+        let (root, worktree) = match matched {
+            CwdMatch::Repo { toplevel } => {
+                let worktree = (Some(toplevel.as_path()) != self.matcher.toplevel())
+                    .then(|| {
+                        toplevel
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                    })
+                    .flatten();
+                (toplevel, worktree)
+            }
+            CwdMatch::Exact => (self.cwd.clone(), None),
+        };
+        let path = diff::display_path(&file, &root);
         let before = snapshot::resolve(&self.snapshot_root, ev);
         // Prefer the hook's post-edit snapshot: reading the file here would pick
         // up any edit that landed between the tool finishing and this event
@@ -128,6 +174,9 @@ impl Pipeline {
             agent,
             diff,
             user_modified: ev.response_bool("userModified").unwrap_or(false),
+            session_id: ev.session_id.clone(),
+            worktree,
+            root,
         })
     }
 
@@ -163,7 +212,7 @@ mod tests {
         fs::write(cwd.join("src/a.rs"), "new\n").unwrap();
         let c = cwd.to_string_lossy();
         let f = cwd.join("src/a.rs").to_string_lossy().to_string();
-        let mut p = Pipeline::new(cwd.clone(), snaps);
+        let mut p = Pipeline::new(cwd.clone(), snaps, MatchMode::CwdOnly);
         let pre = ev(format!(
             r#"{{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"{c}","tool_name":"Edit","tool_use_id":"t1","tool_input":{{"file_path":"{f}"}},"ts":1000}}"#
         ));
@@ -179,6 +228,9 @@ mod tests {
         assert_eq!(card.ts, 2000);
         assert_eq!(card.agent.as_deref(), Some("Explore"));
         assert!(card.user_modified);
+        assert_eq!(card.session_id.as_deref(), Some("s1"));
+        assert!(card.worktree.is_none());
+        assert_eq!(card.root, cwd);
         assert_eq!(card.diff.kind, DiffKind::Modified);
         assert!(card.diff.unified.contains("-old\n+new\n"));
     }
@@ -197,7 +249,7 @@ mod tests {
         fs::write(cwd.join("a.rs"), "three\n").unwrap();
         let c = cwd.to_string_lossy();
         let f = cwd.join("a.rs").to_string_lossy().to_string();
-        let mut p = Pipeline::new(cwd.clone(), snaps.clone());
+        let mut p = Pipeline::new(cwd.clone(), snaps, MatchMode::CwdOnly);
         let post = ev(format!(
             r#"{{"hook_event_name":"PostToolUse","session_id":"s1","cwd":"{c}","tool_name":"Edit","tool_use_id":"t1","tool_input":{{"file_path":"{f}"}}}}"#
         ));
@@ -222,7 +274,7 @@ mod tests {
         fs::write(cwd.join("a.rs"), "recreated\n").unwrap();
         let c = cwd.to_string_lossy();
         let f = cwd.join("a.rs").to_string_lossy().to_string();
-        let mut p = Pipeline::new(cwd.clone(), snaps);
+        let mut p = Pipeline::new(cwd.clone(), snaps, MatchMode::CwdOnly);
         let post = ev(format!(
             r#"{{"hook_event_name":"PostToolUse","session_id":"s1","cwd":"{c}","tool_name":"Edit","tool_use_id":"t1","tool_input":{{"file_path":"{f}"}}}}"#
         ));
@@ -233,7 +285,7 @@ mod tests {
     fn other_cwd_and_non_file_tools_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().to_path_buf();
-        let mut p = Pipeline::new(cwd.clone(), dir.path().join("snaps"));
+        let mut p = Pipeline::new(cwd.clone(), dir.path().join("snaps"), MatchMode::CwdOnly);
         let other = ev(r#"{"hook_event_name":"PostToolUse","cwd":"/elsewhere","tool_name":"Edit","tool_use_id":"x","tool_input":{"file_path":"/elsewhere/f"}}"#.to_string());
         assert!(p.handle(&other).is_none());
         let c = cwd.to_string_lossy();
@@ -248,7 +300,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().to_path_buf();
         let c = cwd.to_string_lossy().to_string();
-        let mut p = Pipeline::new(cwd.clone(), dir.path().join("snaps"));
+        let mut p = Pipeline::new(cwd.clone(), dir.path().join("snaps"), MatchMode::CwdOnly);
         let pre = ev(format!(
             r#"{{"hook_event_name":"PreToolUse","cwd":"{c}","tool_name":"Edit","tool_use_id":"t","tool_input":{{"file_path":"/x"}}}}"#
         ));
@@ -267,7 +319,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().to_path_buf();
         let c = cwd.to_string_lossy().to_string();
-        let mut p = Pipeline::new(cwd, dir.path().join("snaps"));
+        let mut p = Pipeline::new(cwd, dir.path().join("snaps"), MatchMode::CwdOnly);
         p.handle(&ev(format!(r#"{{"hook_event_name":"PreToolUse","cwd":"{c}","tool_name":"Edit","tool_use_id":"t","tool_input":{{"file_path":"/x"}},"ts":1000}}"#)));
         p.prune_pending(1000 + PENDING_TTL_MS - 1);
         assert_eq!(p.pending_len(), 1);
@@ -283,7 +335,7 @@ mod tests {
         let f = cwd.join("n.txt");
         fs::write(&f, "hello\n").unwrap();
         let fs_ = f.to_string_lossy().to_string();
-        let mut p = Pipeline::new(cwd, dir.path().join("snaps"));
+        let mut p = Pipeline::new(cwd, dir.path().join("snaps"), MatchMode::CwdOnly);
         let post = ev(format!(
             r#"{{"hook_event_name":"PostToolUse","session_id":"s","cwd":"{c}","tool_name":"Write","tool_use_id":"w","tool_input":{{"file_path":"{fs_}","content":"hello\n"}},"tool_response":{{"type":"create","originalFile":""}}}}"#
         ));
@@ -291,5 +343,60 @@ mod tests {
         assert_eq!(card.path, "n.txt");
         assert_eq!(card.diff.kind, DiffKind::Modified);
         assert!(card.diff.unified.contains("+hello\n"));
+    }
+
+    #[test]
+    fn session_start_only_clears_its_own_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_path_buf();
+        let c = cwd.to_string_lossy().to_string();
+        let mut p = Pipeline::new(cwd, dir.path().join("snaps"), MatchMode::CwdOnly);
+        for sid in ["s1", "s2"] {
+            p.handle(&ev(format!(
+                r#"{{"hook_event_name":"PreToolUse","session_id":"{sid}","cwd":"{c}","tool_name":"Edit","tool_use_id":"t-{sid}","tool_input":{{"file_path":"/x"}}}}"#
+            )));
+        }
+        assert_eq!(p.pending_len(), 2);
+        p.handle(&ev(format!(
+            r#"{{"hook_event_name":"SessionStart","session_id":"s2","cwd":"{c}","source":"startup"}}"#
+        )));
+        assert_eq!(p.pending_len(), 1);
+        p.handle(&ev(format!(
+            r#"{{"hook_event_name":"SessionStart","session_id":"s1","cwd":"{c}","source":"startup"}}"#
+        )));
+        assert_eq!(p.pending_len(), 0);
+    }
+
+    fn card(session: Option<&str>) -> CardInput {
+        CardInput {
+            path: "f".into(),
+            file: PathBuf::from("/p/f"),
+            tool: "Edit".into(),
+            ts: 0,
+            agent: None,
+            diff: diff::compute(&crate::snapshot::Before::Absent, None, "f"),
+            user_modified: false,
+            session_id: session.map(str::to_string),
+            worktree: None,
+            root: PathBuf::from("/p"),
+        }
+    }
+
+    #[test]
+    fn session_order_is_first_appearance() {
+        let inputs = [
+            card(Some("b")),
+            card(None),
+            card(Some("a")),
+            card(Some("b")),
+        ];
+        assert_eq!(session_order(&inputs), ["b", "a"]);
+    }
+
+    #[test]
+    fn session_matches_prefix_or_suffix() {
+        assert!(session_matches("abc-123456", "abc"));
+        assert!(session_matches("abc-123456", "123456"));
+        assert!(!session_matches("abc-123456", "c-1"));
     }
 }

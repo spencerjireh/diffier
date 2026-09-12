@@ -26,6 +26,25 @@ cannot interleave into a corrupt line. The spool rotates to `events.jsonl.1` at
 50 MB, on whichever event crosses the threshold; replay reads both files. A
 `compact` `SessionStart` does not reset replay history.
 
+## Sessions and worktrees
+
+The monitor accepts an event when its `cwd` is in the same repository: one
+`git rev-parse --git-common-dir --show-toplevel` per distinct cwd string,
+cached, plus one for the monitor's own directory at startup. When git is
+missing, the directory is not a repository, or `--cwd-only` is set, only the
+exact directory matches. Card paths are relative to the card's own worktree
+root, and delta runs there.
+
+Every session with a card in the feed gets a tag once there is more than one
+of them. Tab cycles the feed between all sessions and each one in the order
+its first card appeared; cards are hidden, never dropped. The replay boundary
+spans the repository, so a newer `SessionStart` in another worktree becomes
+the boundary and sessions idle since then drop out, the same rule as within
+one directory.
+
+A `SessionStart` clears only its own session's pending `PreToolUse` entries;
+another session in the same repository may have an edit in flight.
+
 ## Rendering
 
 The monitor diffs the pre-edit snapshot against the post-edit one, falling back
