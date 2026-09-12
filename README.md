@@ -10,20 +10,33 @@ installed.
 
 ## Install
 
-Requires `jq`. `delta` is optional. Prebuilt macOS and Linux binaries are on the
-[releases page](https://github.com/spencerjireh/diffier/releases), or build it:
+`delta` is optional; without it diffs render in a plain built-in style.
 
 ```sh
-cargo install --git https://github.com/spencerjireh/diffier
+cargo install diffier
 diffier install
 ```
 
-`diffier install` writes `~/.claude/hooks/diffier.sh` and registers it in
-`~/.claude/settings.json`, preserving everything else in that file and writing a
-one-time `settings.json.bak`. Restart any running Claude Code session so the
-hooks load.
+`cargo binstall diffier` downloads the prebuilt binary for your platform from
+the [releases page](https://github.com/spencerjireh/diffier/releases) instead of
+compiling; the tarballs there can also be unpacked by hand. To build from the
+development branch, use `cargo install --git https://github.com/spencerjireh/diffier`.
+
+The binary lands in `~/.cargo/bin`. If `diffier` is not found afterwards, add
+that directory to your `PATH`.
+
+`diffier install` registers `diffier hook` in `~/.claude/settings.json` by the
+absolute path of the binary, preserving everything else in that file and
+writing a one-time `settings.json.bak`. Restart any running Claude Code session
+so the hooks load. Run it again if you move the binary; it also removes the
+`~/.claude/hooks/diffier.sh` script that versions before 0.2 installed.
 
 ## Use
+
+Run `diffier` in any second terminal, in the repository you run `claude` in. A
+tmux pane is one way to get that terminal; a separate window, tab, or editor
+terminal panel works the same, because the monitor reads a spool file and does
+not talk to the multiplexer.
 
 ```sh
 cd ~/Projects/some-repo
@@ -48,6 +61,9 @@ sessions whose working directory matches its own.
 
 Scrolling up pauses follow. Mouse capture is on for the wheel, so select text
 with tmux copy mode or shift-drag.
+
+The hook records edits whether or not a monitor is running, so you can also skip
+the live view and print the cards after the fact:
 
 ```sh
 diffier dump             # print the current sessions' cards and exit

@@ -13,4 +13,4 @@
 - [ ] `cargo test --all-features --locked` passes
 - [ ] New behavior has a test, or the change is not testable (say which)
 - [ ] If `tests/snapshots/` changed, I read the diff and it is intended
-- [ ] If `hook/diffier.sh` changed, it still exits 0 on every path
+- [ ] If `src/hook.rs` changed, it still exits 0 on every path and writes nothing to stdout

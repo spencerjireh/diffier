@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -8,12 +8,12 @@ use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
 use crossterm::execute;
 
 use diffier::app::App;
-use diffier::install;
 use diffier::paths::Paths;
 use diffier::render::{EditCard, Renderer, delta_ansi};
 use diffier::session::{Pipeline, session_matches, session_order};
 use diffier::spool::{self, MatchMode};
 use diffier::ui;
+use diffier::{hook, install};
 
 const TICK: Duration = Duration::from_millis(100);
 
@@ -64,9 +64,9 @@ impl RunArgs {
 enum Command {
     /// Tail the spool and show diffs in a TUI (default).
     Run(RunArgs),
-    /// Write the hook script and register it in ~/.claude/settings.json.
+    /// Register `diffier hook` in ~/.claude/settings.json.
     Install,
-    /// Remove the hook script and its settings entries.
+    /// Remove the hook entries from ~/.claude/settings.json.
     Uninstall {
         /// Also delete the spool and snapshot directories.
         #[arg(long)]
@@ -84,6 +84,9 @@ enum Command {
         #[arg(long)]
         session: Option<String>,
     },
+    /// Consume one Claude Code hook payload from stdin. Registered by
+    /// `diffier install`; not meant to be run by hand.
+    Hook,
 }
 
 fn resolve(args: &RunArgs) -> Result<(Paths, PathBuf)> {
@@ -106,10 +109,29 @@ fn main() -> Result<()> {
     match cli.command {
         None => run_tui(&cli.run),
         Some(Command::Run(args)) => run_tui(&args),
-        Some(Command::Install) => install::install(&Paths::discover()),
+        Some(Command::Install) => {
+            let exe = std::env::current_exe().context("locating the diffier binary")?;
+            install::install(&Paths::discover(), &exe)
+        }
         Some(Command::Uninstall { purge }) => install::uninstall(&Paths::discover(), purge),
         Some(Command::Dump { run, ansi, session }) => dump(&run, ansi, session.as_deref()),
+        Some(Command::Hook) => run_hook(),
     }
+}
+
+/// Exit 0 no matter what: a non-zero exit from a PreToolUse hook blocks the
+/// tool call, and a panic would otherwise exit 101.
+fn run_hook() -> Result<()> {
+    let _ = std::panic::catch_unwind(|| {
+        let mut payload = Vec::new();
+        if io::stdin().lock().read_to_end(&mut payload).is_err() {
+            return;
+        }
+        if let Some(paths) = hook::paths_from_env() {
+            hook::run(&paths, &payload);
+        }
+    });
+    std::process::exit(0)
 }
 
 fn dump(args: &RunArgs, ansi: bool, session: Option<&str>) -> Result<()> {

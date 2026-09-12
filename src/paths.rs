@@ -1,8 +1,8 @@
-//! Filesystem locations shared between the hook script and the CLI.
+//! Filesystem locations shared between `diffier hook` and the monitor.
 //!
-//! These must match the shell hook exactly, so they are derived from the same
-//! environment variables with the same defaults rather than from platform
-//! conventions (macOS `dirs::cache_dir` would be `~/Library/Caches`).
+//! Derived from the XDG environment variables with their spec defaults rather
+//! than from platform conventions (macOS `dirs::cache_dir` would be
+//! `~/Library/Caches`), so the paths stay stable and predictable.
 
 use std::env;
 use std::ffi::OsString;
@@ -14,7 +14,7 @@ pub struct Paths {
     pub spool: PathBuf,
     /// Root of pre-edit snapshots: `<root>/<session_id>/<tool_use_id>`.
     pub snapshot_root: PathBuf,
-    /// Installed hook script.
+    /// Where the pre-0.2 shell hook lived; `install` and `uninstall` delete it.
     pub hook_script: PathBuf,
     /// Claude Code user settings.
     pub settings: PathBuf,
@@ -30,9 +30,8 @@ impl Paths {
         )
     }
 
-    /// The hook uses `${VAR:-default}`, which treats an empty value as unset;
-    /// the XDG spec says the same. Mirror that or the two sides disagree about
-    /// where the spool lives.
+    /// An empty value counts as unset, as the XDG spec says and as the shell
+    /// hook's `${VAR:-default}` did.
     pub fn from_parts(
         home: PathBuf,
         xdg_state: Option<OsString>,

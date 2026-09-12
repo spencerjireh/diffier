@@ -21,7 +21,7 @@ Every hook event is appended to `~/.local/state/diffier/events.jsonl` with the
 large `tool_response.content`, `structuredPatch`, and `tool_input.content`
 fields dropped, plus `originalFile` whenever a snapshot made it redundant.
 
-Appends are serialized with a lock directory so that concurrent subagent edits
+Appends are serialized with a file lock so that concurrent subagent edits
 cannot interleave into a corrupt line. The spool rotates to `events.jsonl.1` at
 50 MB, on whichever event crosses the threshold; replay reads both files. A
 `compact` `SessionStart` does not reset replay history.
@@ -57,10 +57,17 @@ feed, labeled with the agent type.
 
 ## Hook safety
 
-The hook script always exits 0, including when `HOME` and the XDG variables are
-all unset. A non-zero exit from a `PreToolUse` hook would block Claude's tool
-call.
+The hook is `diffier hook`, a subcommand of the same binary, registered in
+`~/.claude/settings.json` by absolute path so it runs without `~/.cargo/bin`
+on PATH. It always exits 0, including when `HOME` and the XDG variables are
+all unset (then it writes nothing) and when it panics: `main` wraps it in
+`catch_unwind` and calls `process::exit(0)`. A non-zero exit from a
+`PreToolUse` hook would block Claude's tool call. It never writes to stdout.
 
-Payload fields are constrained to strings before they reach the shell, so a
-non-string `file_path` cannot become a command. `tests/hook.rs` covers both
-properties.
+Spool appends take an advisory lock on `spool.lock` next to the spool with
+`File::try_lock`, retried for about a second. The kernel drops the lock when
+the process exits, so a hook killed mid-write cannot wedge the others. If the
+lock is not acquired within the budget the append happens anyway.
+
+No shell is involved: payload fields are read as JSON strings, and a non-string
+`file_path` counts as absent. `tests/hook.rs` covers these properties.

@@ -29,7 +29,8 @@ pub struct HookEvent {
     /// SessionStart only: startup | resume | clear | compact | fork.
     #[serde(default)]
     pub source: Option<String>,
-    /// Milliseconds since the epoch, added by the hook. jq may emit a float.
+    /// Milliseconds since the epoch, added by the hook. Older spools written
+    /// by the jq-based hook may carry a float.
     #[serde(default)]
     pub ts: Option<f64>,
 }
