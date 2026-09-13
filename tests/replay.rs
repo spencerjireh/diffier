@@ -168,6 +168,26 @@ fn dump_session_filter_matches_prefix_or_suffix() {
 }
 
 #[test]
+fn dump_hides_temp_dir_edits_without_all_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cwd, spool_path) = setup(tmp.path());
+    let mut spool = fs::read_to_string(&spool_path).unwrap();
+    spool.push_str(&format!(
+        "{{\"session_id\":\"s1\",\"cwd\":\"{}\",\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Write\",\"tool_use_id\":\"sp1\",\"tool_input\":{{\"file_path\":\"/tmp/claude-1/proj/s1/scratchpad/note.txt\"}},\"ts\":9001}}\n",
+        cwd.to_string_lossy()
+    ));
+    fs::write(&spool_path, spool).unwrap();
+    let stdout = dump(&cwd, &spool_path, &[]);
+    assert!(!stdout.contains("scratchpad"), "{stdout}");
+    assert!(stdout.contains("== notes.txt"), "{stdout}");
+    let stdout = dump(&cwd, &spool_path, &["--all-files"]);
+    assert!(
+        stdout.contains("== /tmp/claude-1/proj/s1/scratchpad/note.txt · Write · "),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn dump_without_spool_fails_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     Command::cargo_bin("diffier")

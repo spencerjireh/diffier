@@ -46,6 +46,10 @@ struct RunArgs {
     /// Snapshot root (default: the hook's cache dir).
     #[arg(long)]
     snapshots: Option<PathBuf>,
+    /// Also show edits to files in Claude Code temp directories (the
+    /// scratchpad).
+    #[arg(long)]
+    all_files: bool,
     /// Accepted for compatibility with 0.2; diffs no longer go through delta.
     #[arg(long, hide = true)]
     no_delta: bool,
@@ -187,6 +191,9 @@ fn dump(
     };
     let mut out = io::stdout().lock();
     for input in inputs {
+        if input.temp && !args.all_files {
+            continue;
+        }
         if let Some(needle) = session
             && !input
                 .session_id
@@ -216,7 +223,14 @@ fn run_tui(args: &TuiArgs) -> Result<()> {
     } else {
         ViewMode::SideBySide
     };
-    let mut app = App::new(cwd, &paths, mode, terminal_width(), args.run.match_mode());
+    let mut app = App::new(
+        cwd,
+        &paths,
+        mode,
+        terminal_width(),
+        args.run.match_mode(),
+        args.run.all_files,
+    );
 
     let mut terminal = ratatui::init();
     let _ = execute!(io::stdout(), EnableMouseCapture);

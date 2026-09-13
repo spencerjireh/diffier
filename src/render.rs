@@ -797,6 +797,7 @@ mod tests {
             session_id: Some("sess-ab12cd".into()),
             worktree: None,
             root: PathBuf::from("/p"),
+            temp: false,
         }
     }
 

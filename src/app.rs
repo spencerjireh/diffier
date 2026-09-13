@@ -26,6 +26,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("z", "collapse / expand all"),
     ("v", "side by side / unified"),
     ("w", "toggle wrap"),
+    ("o", "show / hide temp-dir edits"),
     ("Tab", "cycle session filter"),
     ("?", "this help"),
     ("q, Esc, Ctrl-c", "quit"),
@@ -49,6 +50,8 @@ pub struct App {
     pub help: bool,
     mode: ViewMode,
     wrap: bool,
+    /// Show cards for files in Claude Code temp directories.
+    all_files: bool,
     cwd: PathBuf,
     width: u16,
     viewport: usize,
@@ -70,6 +73,7 @@ impl App {
         mode: ViewMode,
         width: u16,
         matching: MatchMode,
+        all_files: bool,
     ) -> Self {
         let mut pipeline = Pipeline::new(cwd.clone(), paths.snapshot_root.clone(), matching);
         let replay = spool::scan_replay(&paths.spool, pipeline.matcher_mut());
@@ -85,6 +89,7 @@ impl App {
             help: false,
             mode,
             wrap: true,
+            all_files,
             cwd,
             width,
             viewport: 1,
@@ -129,9 +134,21 @@ impl App {
     }
 
     fn is_visible(&self, card: &EditCard) -> bool {
+        if card.input.temp && !self.all_files {
+            return false;
+        }
         match self.selected_session() {
             Some(id) => card.input.session_id.as_deref() == Some(id),
             None => true,
+        }
+    }
+
+    /// Temp-dir cards hidden by the files filter, across every session.
+    pub fn hidden_count(&self) -> usize {
+        if self.all_files {
+            0
+        } else {
+            self.cards.iter().filter(|c| c.input.temp).count()
         }
     }
 
@@ -206,6 +223,26 @@ impl App {
     pub fn toggle_wrap(&mut self) {
         self.wrap = !self.wrap;
         self.rerender_all();
+    }
+
+    /// `o`: show or hide temp-dir cards. With follow off the current card
+    /// stays at the top, or the next card still visible after it.
+    pub fn toggle_all_files(&mut self) {
+        let cur = self.current_card();
+        self.all_files = !self.all_files;
+        self.rebuild_lines();
+        if self.follow {
+            return;
+        }
+        if let Some(cur) = cur
+            && let Some(span) = self
+                .spans
+                .iter()
+                .find(|s| s.card >= cur)
+                .or_else(|| self.spans.last())
+        {
+            self.jump_to(span.start);
+        }
     }
 
     /// One iteration of background work: tail the spool, prune, apply resize.
@@ -417,6 +454,7 @@ impl App {
             (KeyCode::Char('z'), _) => self.toggle_collapse_all(),
             (KeyCode::Char('v'), _) => self.toggle_view(),
             (KeyCode::Char('w'), _) => self.toggle_wrap(),
+            (KeyCode::Char('o'), _) => self.toggle_all_files(),
             (KeyCode::Char('?'), _) => self.help = true,
             (KeyCode::Tab, _) => self.cycle_session(),
             _ => {}
@@ -439,8 +477,13 @@ impl App {
     /// left so the state fields stay visible.
     pub fn status(&self, width: u16) -> String {
         let card = self.current().map(|i| i + 1).unwrap_or(0);
+        let files = match (self.all_files, self.hidden_count()) {
+            (true, _) => "all".to_string(),
+            (false, 0) => "repo".to_string(),
+            (false, n) => format!("repo (+{n} hidden)"),
+        };
         let right = format!(
-            "session: {}  card: {card}/{}  follow: {}  view: {}  wrap: {}  ? help",
+            "session: {}  card: {card}/{}  follow: {}  view: {}  wrap: {}  files: {files}  ? help",
             self.session_label(),
             self.spans.len(),
             if self.follow { "on" } else { "off" },
@@ -498,6 +541,10 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn app_at(dir: &Path, width: u16) -> App {
+        app_with(dir, width, false)
+    }
+
+    fn app_with(dir: &Path, width: u16, all_files: bool) -> App {
         let paths = Paths {
             spool: dir.join("events.jsonl"),
             snapshot_root: dir.join("snaps"),
@@ -510,6 +557,7 @@ pub(crate) mod tests {
             ViewMode::SideBySide,
             width,
             MatchMode::CwdOnly,
+            all_files,
         )
     }
 
@@ -529,7 +577,16 @@ pub(crate) mod tests {
             session_id: Some(session.to_string()),
             worktree: None,
             root: PathBuf::from("/p"),
+            temp: false,
         }
+    }
+
+    fn temp_input(session: &str, name: &str) -> CardInput {
+        let mut input = input_named(session, name);
+        input.path = format!("/tmp/claude-1/p/s/scratchpad/{name}");
+        input.file = PathBuf::from(&input.path);
+        input.temp = true;
+        input
     }
 
     fn headers(app: &App) -> Vec<String> {
@@ -595,6 +652,82 @@ pub(crate) mod tests {
         }
         app.on_key(KeyEvent::from(KeyCode::Tab));
         assert!(app.status(200).contains("session: s1  card: 2/2"));
+    }
+
+    #[test]
+    fn temp_cards_hidden_until_o() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app(dir.path());
+        app.push_card(input_named("s1", "a.txt"));
+        app.push_card(temp_input("s1", "note.txt"));
+        app.rebuild_lines();
+        app.set_viewport(4);
+        assert_eq!(app.visible_cards(), 1);
+        assert!(!headers(&app).iter().any(|h| h.contains("scratchpad")));
+        assert_eq!(app.hidden_count(), 1);
+        assert!(app.status(200).contains("files: repo (+1 hidden)"));
+
+        app.on_key(key('o'));
+        assert_eq!(app.visible_cards(), 2);
+        assert!(headers(&app)[1].contains("/tmp/claude-1/p/s/scratchpad/note.txt"));
+        assert_eq!(app.hidden_count(), 0);
+        assert!(app.status(200).contains("files: all"));
+        assert!(app.follow);
+
+        app.on_key(key('o'));
+        assert_eq!(app.visible_cards(), 1);
+        assert!(app.status(200).contains("files: repo (+1 hidden)"));
+    }
+
+    #[test]
+    fn o_keeps_the_current_card_at_the_top_when_not_following() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with(dir.path(), 80, true);
+        app.push_card(input_named("s1", "a.txt"));
+        app.push_card(temp_input("s1", "note.txt"));
+        app.push_card(input_named("s1", "c.txt"));
+        app.rebuild_lines();
+        app.set_viewport(4);
+        // Land on the temp card, then hide it: c.txt takes its place.
+        app.on_key(key('g'));
+        app.on_key(key('n'));
+        assert_eq!(app.current_card(), Some(1));
+        app.on_key(key('o'));
+        assert_eq!(app.current_card(), Some(2));
+        assert!(app.at_card_start());
+        assert!(!app.follow);
+        // Showing it again keeps c.txt at the top.
+        app.on_key(key('o'));
+        assert_eq!(app.current_card(), Some(2));
+        assert!(app.at_card_start());
+    }
+
+    #[test]
+    fn all_files_flag_starts_with_temp_cards_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_with(dir.path(), 80, true);
+        app.push_card(temp_input("s1", "note.txt"));
+        app.rebuild_lines();
+        assert_eq!(app.visible_cards(), 1);
+        assert!(app.status(200).contains("files: all"));
+        assert!(!app.status(200).contains("hidden"));
+    }
+
+    #[test]
+    fn files_field_reads_repo_with_nothing_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app(dir.path());
+        app.push_card(input("s1"));
+        app.rebuild_lines();
+        assert!(app.status(200).contains("wrap: on  files: repo  ? help"));
+    }
+
+    #[test]
+    fn help_lists_o() {
+        assert!(
+            KEYS.iter()
+                .any(|(k, what)| *k == "o" && what.contains("temp"))
+        );
     }
 
     #[test]

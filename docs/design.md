@@ -45,6 +45,14 @@ one directory.
 A `SessionStart` clears only its own session's pending `PreToolUse` entries;
 another session in the same repository may have an edit in flight.
 
+Matching is by `cwd`, so an edit to a file outside the repository from a
+session inside it still produces a card, shown with its absolute path. Cards
+whose file sits under a `claude-*` directory directly inside `/tmp`,
+`/private/tmp`, or the platform temp dir (the scratchpad) are marked `temp`:
+the TUI hides them until `o`, counting them in the status bar, and `dump`
+skips them without `--all-files`. The check is lexical on the recorded path.
+Other out-of-repository files are not filtered.
+
 ## Rendering
 
 The monitor diffs the pre-edit snapshot against the post-edit one, falling back

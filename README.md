@@ -47,6 +47,10 @@ ones. Once a second session has made an edit, each card carries a session tag
 when it differs). Outside a repository, or with `--cwd-only`, it follows only
 sessions whose working directory matches its own.
 
+Edits to files in Claude Code's temp directories (`/tmp/claude-*`, the
+scratchpad) are hidden by default; the status bar counts them and `o` shows
+them. Files outside the repository anywhere else stay visible.
+
 | Key | Action |
 | --- | --- |
 | `j` / `k`, arrows, wheel | scroll |
@@ -58,6 +62,7 @@ sessions whose working directory matches its own.
 | `z` | collapse / expand every card |
 | `v` | toggle side-by-side / unified |
 | `w` | toggle wrapping of long lines |
+| `o` | show / hide edits in Claude Code temp directories |
 | `Tab` | cycle the session filter: all, then each session |
 | `?` | key reference |
 | `q`, Esc, `Ctrl-c` | quit |
@@ -77,6 +82,7 @@ diffier dump             # print the current sessions' cards and exit
 diffier dump --session ab12cd   # only one session, by tag or id prefix
 diffier dump --side-by-side --width 120   # two columns instead of unified
 diffier dump --no-wrap   # cut long lines instead of wrapping them
+diffier dump --all-files # include edits in Claude Code temp directories
 diffier run --unified    # one column of -/+ lines
 diffier run --cwd-only   # ignore other worktrees of this repository
 diffier uninstall        # remove the hook and its settings entries
