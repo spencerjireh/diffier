@@ -37,6 +37,35 @@ pub struct CardInput {
     /// Directory `path` is relative to: the edit's worktree
     /// root in repo mode, otherwise the monitor's cwd.
     pub root: PathBuf,
+    /// The file is in a Claude Code temp directory (the scratchpad).
+    pub temp: bool,
+}
+
+/// True when `file` sits under a `claude-*` directory that is directly inside
+/// one of `temp_roots`: the scratchpad and other Claude Code temp files.
+/// Purely lexical; no canonicalization.
+pub fn is_claude_temp(file: &Path, temp_roots: &[PathBuf]) -> bool {
+    file.ancestors().any(|dir| {
+        dir.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("claude-"))
+            && dir
+                .parent()
+                .is_some_and(|p| temp_roots.iter().any(|r| r == p))
+    })
+}
+
+/// `/tmp`, `/private/tmp`, and the platform temp dir (`$TMPDIR` on unix).
+pub fn temp_roots() -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/tmp"), PathBuf::from("/private/tmp")];
+    let mut sys = std::env::temp_dir();
+    // `Path::components` ignores a trailing slash, but `PartialEq` on the
+    // buffer does not, so rebuild it.
+    sys = sys.components().collect();
+    if !roots.contains(&sys) {
+        roots.push(sys);
+    }
+    roots
 }
 
 /// Distinct session ids in order of first card.
@@ -59,6 +88,7 @@ pub struct Pipeline {
     cwd: PathBuf,
     matcher: CwdMatcher,
     snapshot_root: PathBuf,
+    temp_roots: Vec<PathBuf>,
     pending: HashMap<String, PendingPre>,
     pub session_id: Option<String>,
 }
@@ -69,6 +99,7 @@ impl Pipeline {
             matcher: CwdMatcher::new(cwd.clone(), mode),
             cwd,
             snapshot_root,
+            temp_roots: temp_roots(),
             pending: HashMap::new(),
             session_id: None,
         }
@@ -166,6 +197,7 @@ impl Pipeline {
         let after = snapshot::resolve_after(&self.snapshot_root, ev)
             .unwrap_or_else(|| fs::read(&file).ok());
         let diff = diff::compute(&before, after.as_deref());
+        let temp = is_claude_temp(&file, &self.temp_roots);
         Some(CardInput {
             path,
             file,
@@ -177,6 +209,7 @@ impl Pipeline {
             session_id: ev.session_id.clone(),
             worktree,
             root,
+            temp,
         })
     }
 
@@ -379,7 +412,56 @@ mod tests {
             session_id: session.map(str::to_string),
             worktree: None,
             root: PathBuf::from("/p"),
+            temp: false,
         }
+    }
+
+    #[test]
+    fn claude_temp_needs_claude_dir_directly_under_a_temp_root() {
+        let roots = [PathBuf::from("/tmp"), PathBuf::from("/private/tmp")];
+        assert!(is_claude_temp(
+            Path::new("/private/tmp/claude-502/p/s/scratchpad/x.rs"),
+            &roots
+        ));
+        assert!(is_claude_temp(Path::new("/tmp/claude-1/x"), &roots));
+        assert!(!is_claude_temp(Path::new("/tmp/other/claude-1/x"), &roots));
+        assert!(!is_claude_temp(Path::new("/home/u/claude-notes/x"), &roots));
+        assert!(!is_claude_temp(Path::new("/tmp/x"), &roots));
+        let tmpdir = [PathBuf::from("/var/folders/ab/T")];
+        assert!(is_claude_temp(
+            Path::new("/var/folders/ab/T/claude-7/scratchpad/n.txt"),
+            &tmpdir
+        ));
+        assert!(!is_claude_temp(Path::new("/tmp/claude-7/n.txt"), &tmpdir));
+    }
+
+    #[test]
+    fn temp_roots_include_tmp_and_the_platform_dir() {
+        let roots = temp_roots();
+        assert!(roots.contains(&PathBuf::from("/tmp")));
+        let sys: PathBuf = std::env::temp_dir().components().collect();
+        assert!(roots.contains(&sys));
+        assert_eq!(roots.iter().filter(|r| **r == sys).count(), 1);
+    }
+
+    #[test]
+    fn scratchpad_edit_from_the_repo_is_marked_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("proj");
+        fs::create_dir_all(&cwd).unwrap();
+        let c = cwd.to_string_lossy();
+        let mut p = Pipeline::new(cwd.clone(), dir.path().join("snaps"), MatchMode::CwdOnly);
+        let post = ev(format!(
+            r#"{{"hook_event_name":"PostToolUse","session_id":"s1","cwd":"{c}","tool_name":"Write","tool_use_id":"t1","tool_input":{{"file_path":"/tmp/claude-502/proj/s1/scratchpad/note.txt"}}}}"#
+        ));
+        let card = p.handle(&post).expect("card");
+        assert!(card.temp);
+        assert_eq!(card.path, "/tmp/claude-502/proj/s1/scratchpad/note.txt");
+        let inside = cwd.join("a.txt").to_string_lossy().to_string();
+        let post = ev(format!(
+            r#"{{"hook_event_name":"PostToolUse","session_id":"s1","cwd":"{c}","tool_name":"Write","tool_use_id":"t2","tool_input":{{"file_path":"{inside}"}}}}"#
+        ));
+        assert!(!p.handle(&post).expect("card").temp);
     }
 
     #[test]
