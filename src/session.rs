@@ -34,7 +34,7 @@ pub struct CardInput {
     pub session_id: Option<String>,
     /// Basename of the edit's worktree, only when it is not the monitor's.
     pub worktree: Option<String>,
-    /// Directory `path` is relative to and delta runs in: the edit's worktree
+    /// Directory `path` is relative to: the edit's worktree
     /// root in repo mode, otherwise the monitor's cwd.
     pub root: PathBuf,
 }
@@ -165,7 +165,7 @@ impl Pipeline {
         // being processed, which is every event during a replay.
         let after = snapshot::resolve_after(&self.snapshot_root, ev)
             .unwrap_or_else(|| fs::read(&file).ok());
-        let diff = diff::compute(&before, after.as_deref(), &path);
+        let diff = diff::compute(&before, after.as_deref());
         Some(CardInput {
             path,
             file,
@@ -232,7 +232,7 @@ mod tests {
         assert!(card.worktree.is_none());
         assert_eq!(card.root, cwd);
         assert_eq!(card.diff.kind, DiffKind::Modified);
-        assert!(card.diff.unified.contains("-old\n+new\n"));
+        assert!(card.diff.unified_text().contains("-old\n+new\n"));
     }
 
     #[test]
@@ -255,11 +255,11 @@ mod tests {
         ));
         let card = p.handle(&post).unwrap();
         assert!(
-            card.diff.unified.contains("-one\n+two\n"),
+            card.diff.unified_text().contains("-one\n+two\n"),
             "{}",
-            card.diff.unified
+            card.diff.unified_text()
         );
-        assert!(!card.diff.unified.contains("three"));
+        assert!(!card.diff.unified_text().contains("three"));
     }
 
     #[test]
@@ -342,7 +342,7 @@ mod tests {
         let card = p.handle(&post).unwrap();
         assert_eq!(card.path, "n.txt");
         assert_eq!(card.diff.kind, DiffKind::Modified);
-        assert!(card.diff.unified.contains("+hello\n"));
+        assert!(card.diff.unified_text().contains("+hello\n"));
     }
 
     #[test]
@@ -374,7 +374,7 @@ mod tests {
             tool: "Edit".into(),
             ts: 0,
             agent: None,
-            diff: diff::compute(&crate::snapshot::Before::Absent, None, "f"),
+            diff: diff::compute(&crate::snapshot::Before::Absent, None),
             user_modified: false,
             session_id: session.map(str::to_string),
             worktree: None,

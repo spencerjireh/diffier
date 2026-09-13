@@ -33,7 +33,7 @@ The monitor accepts an event when its `cwd` is in the same repository: one
 cached, plus one for the monitor's own directory at startup. When git is
 missing, the directory is not a repository, or `--cwd-only` is set, only the
 exact directory matches. Card paths are relative to the card's own worktree
-root, and delta runs there.
+root.
 
 Every session with a card in the feed gets a tag once there is more than one
 of them. Tab cycles the feed between all sessions and each one in the order
@@ -51,17 +51,29 @@ The monitor diffs the pre-edit snapshot against the post-edit one, falling back
 to the file on disk. When no pre-edit snapshot exists it uses
 `tool_response.originalFile`, then the edit's `old_string`/`new_string`.
 
-Diffs are cut at 500 lines with a count of the remainder. Binary files and files
-missing after the edit show a one-line notice. Subagent edits appear in the same
-feed, labeled with the agent type.
+The diff is a list of hunks with three lines of context, each hunk a list of
+rows: equal, deleted, or inserted, with line numbers on the sides the row
+exists on. Rows in a replaced block carry word-level marks from `similar`'s
+inline diff. Diffs are cut at 500 rows with a count of the remainder; the
+`+N -N` in the card header counts the whole diff. Binary files and files
+missing after the edit show a one-line notice. Subagent edits appear in the
+same feed, labeled with the agent type.
 
-Each card is laid out either side by side (the default) or unified; `v`
-toggles, and `--unified` starts the TUI in the other mode. Side by side needs
-100 columns, so below that every card renders unified regardless of the
-selected mode, re-evaluated on each resize. With delta the layout is delta's
-own `--side-by-side`. The plain renderer builds its two-column layout by
-re-parsing the unified text the diff step already cut at 500 lines, so both
-modes show the same lines and the same remainder count.
+Rendering has two stages. `paint` runs once per card: syntect colors each row
+(syntax chosen by extension, then file name, then the first line of the file)
+and the colors are merged with the word marks. `layout` runs whenever the
+width, view mode, or wrap setting changes and only arranges painted rows into
+lines: side by side (deleted and inserted runs paired line for line) or
+unified, with tinted backgrounds on changed rows, a stronger tint on changed
+words, and long lines wrapped into continuation rows or cut with an ellipsis.
+Side by side needs 100 columns; below that every card renders unified
+regardless of the selected mode, re-evaluated on each resize. The palette is
+fixed for dark terminals.
+
+The feed is one flat list of lines with a table of where each visible card
+starts. The current card is the one owning the top visible line; its header is
+pinned above the body, `n`/`N` move between card starts, and `Enter`/`z`
+collapse cards to their header line.
 
 ## Hook safety
 
