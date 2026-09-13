@@ -55,6 +55,14 @@ Diffs are cut at 500 lines with a count of the remainder. Binary files and files
 missing after the edit show a one-line notice. Subagent edits appear in the same
 feed, labeled with the agent type.
 
+Each card is laid out either side by side (the default) or unified; `v`
+toggles, and `--unified` starts the TUI in the other mode. Side by side needs
+100 columns, so below that every card renders unified regardless of the
+selected mode, re-evaluated on each resize. With delta the layout is delta's
+own `--side-by-side`. The plain renderer builds its two-column layout by
+re-parsing the unified text the diff step already cut at 500 lines, so both
+modes show the same lines and the same remainder count.
+
 ## Hook safety
 
 The hook is `diffier hook`, a subcommand of the same binary, registered in

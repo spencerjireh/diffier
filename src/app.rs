@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKi
 use ratatui::text::Line;
 
 use crate::paths::Paths;
-use crate::render::{EditCard, Renderer};
+use crate::render::{EditCard, Renderer, ViewMode};
 use crate::session::{CardInput, Pipeline};
 use crate::spool::{self, MatchMode, SpoolTailer};
 
@@ -20,6 +20,7 @@ pub struct App {
     pub follow: bool,
     pub quit: bool,
     renderer: Renderer,
+    mode: ViewMode,
     cwd: PathBuf,
     width: u16,
     viewport: usize,
@@ -41,10 +42,11 @@ impl App {
         cwd: PathBuf,
         paths: &Paths,
         renderer: Renderer,
+        mode: ViewMode,
         width: u16,
-        mode: MatchMode,
+        matching: MatchMode,
     ) -> Self {
-        let mut pipeline = Pipeline::new(cwd.clone(), paths.snapshot_root.clone(), mode);
+        let mut pipeline = Pipeline::new(cwd.clone(), paths.snapshot_root.clone(), matching);
         let replay = spool::scan_replay(&paths.spool, pipeline.matcher_mut());
         let inputs = pipeline.replay(&replay.events);
         let tailer = SpoolTailer::new(paths.spool.clone(), replay.offset);
@@ -55,6 +57,7 @@ impl App {
             follow: true,
             quit: false,
             renderer,
+            mode,
             cwd,
             width,
             viewport: 1,
@@ -81,7 +84,7 @@ impl App {
             self.sessions.push(id.clone());
         }
         self.cards
-            .push(EditCard::new(input, &self.renderer, self.width));
+            .push(EditCard::new(input, &self.renderer, self.mode, self.width));
     }
 
     fn show_tags(&self) -> bool {
@@ -143,18 +146,32 @@ impl App {
         self.renderer.is_delta()
     }
 
+    pub fn view_mode(&self) -> ViewMode {
+        self.mode
+    }
+
+    /// `v`: side by side <-> unified. Every card is laid out per mode, so all
+    /// of them re-render; follow is left alone like `cycle_session`.
+    pub fn toggle_view(&mut self) {
+        self.mode = self.mode.toggle();
+        for card in &mut self.cards {
+            card.rerender(&self.renderer, self.mode, self.width);
+        }
+        self.rebuild_lines();
+    }
+
     /// One iteration of background work: tail the spool, prune, apply resize.
     pub fn tick(&mut self) {
         if let Some(w) = self.pending_width.take()
             && w != self.width
         {
             self.width = w;
-            // Only delta lays out to the width; the plain renderer does not, so
-            // a resize there costs one pass over the headers instead of a delta
-            // process per card.
-            if self.renderer.is_delta() {
+            // Delta and the split layout are laid out to the width; plain
+            // unified is not, so a resize there costs one pass over the
+            // headers instead of a render per card.
+            if self.renderer.is_delta() || self.mode == ViewMode::SideBySide {
                 for card in &mut self.cards {
-                    card.rerender(&self.renderer, self.width);
+                    card.rerender(&self.renderer, self.mode, self.width);
                 }
             }
             self.rebuild_lines();
@@ -252,6 +269,7 @@ impl App {
                 self.follow = !self.follow;
                 self.clamp();
             }
+            (KeyCode::Char('v'), _) => self.toggle_view(),
             (KeyCode::Tab, _) => self.cycle_session(),
             _ => {}
         }
@@ -277,9 +295,10 @@ impl App {
             None => self.cards.len().to_string(),
         };
         let right = format!(
-            "session: {}  cards: {cards}  follow: {}  delta: {}  [j/k g/G p Tab q]",
+            "session: {}  cards: {cards}  follow: {}  view: {}  delta: {}  [j/k g/G p v Tab q]",
             self.session_label(),
             if self.follow { "on" } else { "off" },
+            self.mode.label(),
             if self.renderer.is_delta() {
                 "yes"
             } else {
@@ -320,6 +339,10 @@ mod tests {
     use crate::snapshot::Before;
 
     fn app(dir: &Path) -> App {
+        app_at(dir, 80)
+    }
+
+    fn app_at(dir: &Path, width: u16) -> App {
         let paths = Paths {
             spool: dir.join("events.jsonl"),
             snapshot_root: dir.join("snaps"),
@@ -330,9 +353,14 @@ mod tests {
             dir.to_path_buf(),
             &paths,
             Renderer::Plain,
-            80,
+            ViewMode::SideBySide,
+            width,
             MatchMode::CwdOnly,
         )
+    }
+
+    fn has_split_rows(app: &App) -> bool {
+        app.lines.iter().any(|l| l.to_string().contains('│'))
     }
 
     fn input(session: &str) -> CardInput {
@@ -403,5 +431,38 @@ mod tests {
         app.cycle_session();
         assert_eq!(app.selected_session(), None);
         assert!(!app.has_visible_cards());
+    }
+
+    #[test]
+    fn v_toggles_view_and_rerenders_cards() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_at(dir.path(), 120);
+        app.push_card(input("s1"));
+        app.rebuild_lines();
+        assert!(app.status(200).contains("view: split"));
+        assert!(has_split_rows(&app));
+        app.on_key(KeyEvent::from(KeyCode::Char('v')));
+        assert_eq!(app.view_mode(), ViewMode::Unified);
+        assert!(app.status(200).contains("view: unified"));
+        assert!(!has_split_rows(&app));
+        app.on_key(KeyEvent::from(KeyCode::Char('v')));
+        assert_eq!(app.view_mode(), ViewMode::SideBySide);
+        assert!(has_split_rows(&app));
+    }
+
+    #[test]
+    fn resize_rerenders_split_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = app_at(dir.path(), 120);
+        app.push_card(input("s1"));
+        app.rebuild_lines();
+        assert!(has_split_rows(&app));
+        app.on_resize(80, 24);
+        app.tick();
+        assert!(!has_split_rows(&app));
+        assert!(app.status(200).contains("view: split"));
+        app.on_resize(120, 24);
+        app.tick();
+        assert!(has_split_rows(&app));
     }
 }
