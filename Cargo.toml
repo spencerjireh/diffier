@@ -1,6 +1,6 @@
 [package]
 name = "diffier"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Live diff feed for Claude Code edits, fed by hooks"
 license = "MIT"
