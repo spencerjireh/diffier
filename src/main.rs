@@ -9,7 +9,7 @@ use crossterm::execute;
 
 use diffier::app::App;
 use diffier::paths::Paths;
-use diffier::render::{EditCard, Renderer, delta_ansi};
+use diffier::render::{EditCard, Renderer, ViewMode, delta_ansi};
 use diffier::session::{Pipeline, session_matches, session_order};
 use diffier::spool::{self, MatchMode};
 use diffier::ui;
@@ -27,9 +27,10 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
     #[command(flatten)]
-    run: RunArgs,
+    run: TuiArgs,
 }
 
+/// Options shared by the TUI and `dump`.
 #[derive(clap::Args, Clone)]
 struct RunArgs {
     /// Directory whose Claude Code sessions to follow (default: current dir).
@@ -60,10 +61,19 @@ impl RunArgs {
     }
 }
 
+#[derive(clap::Args, Clone)]
+struct TuiArgs {
+    #[command(flatten)]
+    run: RunArgs,
+    /// Show unified diffs instead of side by side.
+    #[arg(long)]
+    unified: bool,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Tail the spool and show diffs in a TUI (default).
-    Run(RunArgs),
+    Run(TuiArgs),
     /// Register `diffier hook` in ~/.claude/settings.json.
     Install,
     /// Remove the hook entries from ~/.claude/settings.json.
@@ -83,6 +93,12 @@ enum Command {
         /// session tag works.
         #[arg(long)]
         session: Option<String>,
+        /// Lay diffs out side by side instead of unified.
+        #[arg(long)]
+        side_by_side: bool,
+        /// Render width in columns (default: the terminal width, or 100).
+        #[arg(long)]
+        width: Option<u16>,
     },
     /// Consume one Claude Code hook payload from stdin. Registered by
     /// `diffier install`; not meant to be run by hand.
@@ -114,7 +130,13 @@ fn main() -> Result<()> {
             install::install(&Paths::discover(), &exe)
         }
         Some(Command::Uninstall { purge }) => install::uninstall(&Paths::discover(), purge),
-        Some(Command::Dump { run, ansi, session }) => dump(&run, ansi, session.as_deref()),
+        Some(Command::Dump {
+            run,
+            ansi,
+            session,
+            side_by_side,
+            width,
+        }) => dump(&run, ansi, session.as_deref(), side_by_side, width),
         Some(Command::Hook) => run_hook(),
     }
 }
@@ -134,7 +156,13 @@ fn run_hook() -> Result<()> {
     std::process::exit(0)
 }
 
-fn dump(args: &RunArgs, ansi: bool, session: Option<&str>) -> Result<()> {
+fn dump(
+    args: &RunArgs,
+    ansi: bool,
+    session: Option<&str>,
+    side_by_side: bool,
+    width: Option<u16>,
+) -> Result<()> {
     let (paths, cwd) = resolve(args)?;
     if !paths.spool.exists() {
         anyhow::bail!(
@@ -156,7 +184,12 @@ fn dump(args: &RunArgs, ansi: bool, session: Option<&str>) -> Result<()> {
     // Tags follow the same rule as the TUI: shown once the feed has more than
     // one session, before any --session filter narrows it.
     let tags = session_order(&inputs).len() > 1;
-    let width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(100);
+    let mode = if side_by_side {
+        ViewMode::SideBySide
+    } else {
+        ViewMode::Unified
+    };
+    let width = width.unwrap_or_else(terminal_width);
     let mut out = io::stdout().lock();
     for input in inputs {
         if let Some(needle) = session
@@ -167,12 +200,16 @@ fn dump(args: &RunArgs, ansi: bool, session: Option<&str>) -> Result<()> {
         {
             continue;
         }
-        let card = EditCard::new(input, &build_with, width);
+        let card = EditCard::new(input, &build_with, mode, width);
         writeln!(out, "== {}", card.header_text(tags))?;
         let rendered = match (&detected, ansi) {
-            (Renderer::Delta(bin), true) if !card.input.diff.unified.is_empty() => {
-                delta_ansi(bin, &card.input.diff.unified, width, &card.input.root)
-            }
+            (Renderer::Delta(bin), true) if !card.input.diff.unified.is_empty() => delta_ansi(
+                bin,
+                &card.input.diff.unified,
+                mode.effective(width) == ViewMode::SideBySide,
+                width,
+                &card.input.root,
+            ),
             _ => None,
         };
         match rendered {
@@ -188,11 +225,26 @@ fn dump(args: &RunArgs, ansi: bool, session: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_tui(args: &RunArgs) -> Result<()> {
-    let (paths, cwd) = resolve(args)?;
-    let renderer = Renderer::detect(args.no_delta);
-    let width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(100);
-    let mut app = App::new(cwd, &paths, renderer, width, args.match_mode());
+fn terminal_width() -> u16 {
+    crossterm::terminal::size().map(|(w, _)| w).unwrap_or(100)
+}
+
+fn run_tui(args: &TuiArgs) -> Result<()> {
+    let (paths, cwd) = resolve(&args.run)?;
+    let renderer = Renderer::detect(args.run.no_delta);
+    let mode = if args.unified {
+        ViewMode::Unified
+    } else {
+        ViewMode::SideBySide
+    };
+    let mut app = App::new(
+        cwd,
+        &paths,
+        renderer,
+        mode,
+        terminal_width(),
+        args.run.match_mode(),
+    );
 
     let mut terminal = ratatui::init();
     let _ = execute!(io::stdout(), EnableMouseCapture);

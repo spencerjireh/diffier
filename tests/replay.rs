@@ -5,8 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
-use diffier::render::{EditCard, Renderer};
-use diffier::session::{Pipeline, session_order};
+use diffier::render::{EditCard, Renderer, ViewMode};
+use diffier::session::{CardInput, Pipeline, session_order};
 use diffier::spool::{self, MatchMode};
 
 fn fixtures() -> PathBuf {
@@ -41,6 +41,23 @@ fn setup(root: &Path) -> (PathBuf, PathBuf) {
     (cwd, spool_path)
 }
 
+/// Cards rendered with the plain renderer, summary plus body, blank-separated.
+fn render_cards(inputs: &[CardInput], mode: ViewMode, width: u16, tags: bool) -> String {
+    let mut out = String::new();
+    for input in inputs {
+        let card = EditCard::new(input.clone(), &Renderer::Plain, mode, width);
+        out.push_str("== ");
+        out.push_str(&card.summary(tags));
+        out.push('\n');
+        for line in card.body_plain() {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out
+}
+
 #[test]
 fn replay_renders_expected_cards() {
     let tmp = tempfile::tempdir().unwrap();
@@ -55,27 +72,18 @@ fn replay_renders_expected_cards() {
     // s0 is stale, so the feed holds one session and headers carry no tag.
     let tags = session_order(&inputs).len() > 1;
     assert!(!tags);
-    let cards: Vec<EditCard> = inputs
-        .into_iter()
-        .map(|input| EditCard::new(input, &Renderer::Plain, 80))
-        .collect();
-
-    let mut out = String::new();
-    for card in &cards {
-        out.push_str("== ");
-        out.push_str(&card.summary(tags));
-        out.push('\n');
-        for line in card.body_plain() {
-            out.push_str(&line);
-            out.push('\n');
-        }
-        out.push('\n');
-    }
     // The orphan Pre stays pending; nothing from s0, /somewhere/else, or Bash.
     assert_eq!(pipeline.pending_len(), 1);
     assert_eq!(pipeline.session_id.as_deref(), Some("s1"));
     assert_eq!(replay.offset, fs::metadata(&spool_path).unwrap().len());
-    insta::assert_snapshot!("replay_cards", out);
+    insta::assert_snapshot!(
+        "replay_cards",
+        render_cards(&inputs, ViewMode::Unified, 80, tags)
+    );
+    insta::assert_snapshot!(
+        "replay_cards_split",
+        render_cards(&inputs, ViewMode::SideBySide, 120, tags)
+    );
 }
 
 /// Run `diffier dump` over the fixture with `extra` args and return stdout.
@@ -106,6 +114,23 @@ fn dump_subcommand_prints_cards() {
     assert!(stdout.contains("[Explore]"), "{stdout}");
     assert!(!stdout.contains("orphan"), "{stdout}");
     assert!(!stdout.contains("somewhere/else"), "{stdout}");
+}
+
+#[test]
+fn dump_side_by_side_flag_splits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cwd, spool_path) = setup(tmp.path());
+    let stdout = dump(&cwd, &spool_path, &["--side-by-side", "--width", "120"]);
+    let header = stdout
+        .lines()
+        .find(|l| l.starts_with("--- a/src/main.rs"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(header.contains("+++ b/src/main.rs"), "{header}");
+    assert!(stdout.contains('│'), "{stdout}");
+    // Below the threshold the same flag prints unified.
+    let narrow = dump(&cwd, &spool_path, &["--side-by-side", "--width", "80"]);
+    assert!(!narrow.contains('│'), "{narrow}");
+    assert!(narrow.contains("\n+++ b/src/main.rs\n"), "{narrow}");
 }
 
 #[test]
