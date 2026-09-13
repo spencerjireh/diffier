@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
-use diffier::render::{EditCard, Renderer, ViewMode};
+use diffier::render::{EditCard, LayoutOpts, ViewMode};
 use diffier::session::{CardInput, Pipeline, session_order};
 use diffier::spool::{self, MatchMode};
 
@@ -41,11 +41,16 @@ fn setup(root: &Path) -> (PathBuf, PathBuf) {
     (cwd, spool_path)
 }
 
-/// Cards rendered with the plain renderer, summary plus body, blank-separated.
+/// Cards as summary plus body, blank-separated.
 fn render_cards(inputs: &[CardInput], mode: ViewMode, width: u16, tags: bool) -> String {
+    let opts = LayoutOpts {
+        mode,
+        width,
+        wrap: true,
+    };
     let mut out = String::new();
     for input in inputs {
-        let card = EditCard::new(input.clone(), &Renderer::Plain, mode, width);
+        let card = EditCard::new(input.clone(), &opts);
         out.push_str("== ");
         out.push_str(&card.summary(tags));
         out.push('\n');
@@ -92,7 +97,7 @@ fn replay_renders_expected_cards() {
 fn dump(cwd: &Path, spool_path: &Path, extra: &[&str]) -> String {
     let assert = Command::cargo_bin("diffier")
         .unwrap()
-        .args(["dump", "--no-delta", "--cwd-only", "--spool"])
+        .args(["dump", "--cwd-only", "--spool"])
         .arg(spool_path)
         .arg("--snapshots")
         .arg(fixtures().join("snapshots"))
@@ -110,7 +115,8 @@ fn dump_subcommand_prints_cards() {
     let (cwd, spool_path) = setup(tmp.path());
     let stdout = dump(&cwd, &spool_path, &[]);
     assert!(stdout.contains("== src/main.rs · Edit · "), "{stdout}");
-    assert!(stdout.contains("+++ b/notes.txt"), "{stdout}");
+    assert!(stdout.contains("-    println!(\"hi\");"), "{stdout}");
+    assert!(stdout.contains("== notes.txt · Write · "), "{stdout}");
     assert!(stdout.contains("[Explore]"), "{stdout}");
     assert!(!stdout.contains("orphan"), "{stdout}");
     assert!(!stdout.contains("somewhere/else"), "{stdout}");
@@ -121,16 +127,30 @@ fn dump_side_by_side_flag_splits() {
     let tmp = tempfile::tempdir().unwrap();
     let (cwd, spool_path) = setup(tmp.path());
     let stdout = dump(&cwd, &spool_path, &["--side-by-side", "--width", "120"]);
-    let header = stdout
+    let row = stdout
         .lines()
-        .find(|l| l.starts_with("--- a/src/main.rs"))
+        .find(|l| l.contains("-    println!(\"hi\");"))
         .unwrap_or_else(|| panic!("{stdout}"));
-    assert!(header.contains("+++ b/src/main.rs"), "{header}");
-    assert!(stdout.contains('│'), "{stdout}");
+    assert!(
+        row.contains("│") && row.contains("+    println!(\"hello\");"),
+        "{row}"
+    );
     // Below the threshold the same flag prints unified.
     let narrow = dump(&cwd, &spool_path, &["--side-by-side", "--width", "80"]);
     assert!(!narrow.contains('│'), "{narrow}");
-    assert!(narrow.contains("\n+++ b/src/main.rs\n"), "{narrow}");
+    assert!(narrow.contains("── @@ -1,3 +1,3 @@ ─"), "{narrow}");
+}
+
+#[test]
+fn dump_no_wrap_flag_cuts_long_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cwd, spool_path) = setup(tmp.path());
+    // The notebook line is longer than a 40-column unified layout allows.
+    let wrapped = dump(&cwd, &spool_path, &["--width", "40"]);
+    assert!(!wrapped.contains('…'), "{wrapped}");
+    let cut = dump(&cwd, &spool_path, &["--width", "40", "--no-wrap"]);
+    assert!(cut.contains('…'), "{cut}");
+    assert!(cut.lines().count() < wrapped.lines().count());
 }
 
 #[test]

@@ -2,12 +2,12 @@
 name = "diffier"
 version = "0.2.0"
 edition = "2024"
-description = "Live diff feed for Claude Code edits, fed by hooks, rendered with delta"
+description = "Live diff feed for Claude Code edits, fed by hooks"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/spencerjireh/diffier"
 homepage = "https://github.com/spencerjireh/diffier"
-keywords = ["claude-code", "diff", "tui", "hooks", "delta"]
+keywords = ["claude-code", "diff", "tui", "hooks"]
 categories = ["command-line-utilities", "development-tools"]
 rust-version = "1.89"
 
@@ -22,8 +22,8 @@ path = "src/lib.rs"
 [dependencies]
 ratatui = { version = "0.30", features = ["crossterm_0_29"] }
 crossterm = "0.29"
-ansi-to-tui = "8"
-similar = "3"
+similar = { version = "3", features = ["inline"] }
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
 unicode-width = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

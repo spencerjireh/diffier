@@ -4,13 +4,10 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A live diff feed for Claude Code. Run it in a second pane and every Edit, Write,
-MultiEdit, and NotebookEdit shows up as a full diff the moment it lands,
-rendered through [delta](https://github.com/dandavison/delta) when it is
-installed.
+MultiEdit, and NotebookEdit shows up as a full diff the moment it lands: side
+by side, with syntax colors, word-level highlights, and line numbers.
 
 ## Install
-
-`delta` is optional; without it diffs render in a plain built-in style.
 
 ```sh
 cargo install diffier
@@ -56,14 +53,21 @@ sessions whose working directory matches its own.
 | `Ctrl-d` / `Ctrl-u`, PgDn / PgUp | half page / page |
 | `g` / `G` | top / bottom, and resume follow |
 | `p` | toggle follow |
+| `n` / `N` | next / previous card |
+| `Enter` | collapse / expand the current card |
+| `z` | collapse / expand every card |
 | `v` | toggle side-by-side / unified |
+| `w` | toggle wrapping of long lines |
 | `Tab` | cycle the session filter: all, then each session |
+| `?` | key reference |
 | `q`, Esc, `Ctrl-c` | quit |
 
-Diffs are side by side by default and unified with `--unified`. Side by side
-needs about 100 columns; below that the feed draws unified until the terminal
-is wide enough again. Scrolling up pauses follow. Mouse capture is on for the wheel, so select text
-with tmux copy mode or shift-drag.
+The current card is the one at the top of the view; its header stays pinned
+while its body scrolls. Diffs are side by side by default and unified with
+`--unified`. Side by side needs about 100 columns; below that the feed draws
+unified until the terminal is wide enough again. Colors assume a dark
+terminal background. Scrolling up pauses follow. Mouse capture is on for the
+wheel, so select text with tmux copy mode or shift-drag.
 
 The hook records edits whether or not a monitor is running, so you can also skip
 the live view and print the cards after the fact:
@@ -72,8 +76,8 @@ the live view and print the cards after the fact:
 diffier dump             # print the current sessions' cards and exit
 diffier dump --session ab12cd   # only one session, by tag or id prefix
 diffier dump --side-by-side --width 120   # two columns instead of unified
+diffier dump --no-wrap   # cut long lines instead of wrapping them
 diffier run --unified    # one column of -/+ lines
-diffier run --no-delta   # force the plain renderer
 diffier run --cwd-only   # ignore other worktrees of this repository
 diffier uninstall        # remove the hook and its settings entries
 ```

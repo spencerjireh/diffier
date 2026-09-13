@@ -2,8 +2,7 @@
 
 ## Setup
 
-Requirements: a Rust toolchain (1.89 or later, edition 2024) and optionally
-[delta](https://github.com/dandavison/delta).
+Requirements: a Rust toolchain (1.89 or later, edition 2024).
 
 ```sh
 git clone https://github.com/spencerjireh/diffier
